@@ -1,32 +1,39 @@
 ﻿// -----------------------------------------------------------------------
-//   <copyright file="Activator.cs" company="Asynkron HB">
-//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
+//   <copyright file="Activator.cs" company="Asynkron AB">
+//       Copyright (C) 2015-2020 Asynkron AB All rights reserved
 //   </copyright>
 // -----------------------------------------------------------------------
 
-using System;
 using System.Threading.Tasks;
+using Proto.Remote.Metrics;
 
 namespace Proto.Remote
 {
     public class Activator : IActor
     {
+        private readonly RemoteConfigBase _remoteConfig;
+        private readonly ActorSystem _system;
+
+        public Activator(RemoteConfigBase remoteConfig, ActorSystem system)
+        {
+            _remoteConfig = remoteConfig;
+            _system = system;
+        }
+
         public Task ReceiveAsync(IContext context)
         {
             switch (context.Message)
             {
                 case ActorPidRequest msg:
-                    var props = Remote.GetKnownKind(msg.Kind);
+                    var props = _remoteConfig.GetRemoteKind(msg.Kind);
                     var name = msg.Name;
-                    if (string.IsNullOrEmpty(name))
-                    {
-                        name = ProcessRegistry.Instance.NextId();
-                    }
+                    if (string.IsNullOrEmpty(name)) name = _system.ProcessRegistry.NextId();
 
                     try
                     {
-                        var pid = RootContext.Empty.SpawnNamed(props, name);
-                        var response = new ActorPidResponse{ Pid = pid };
+                        var pid = _system.Root.SpawnNamed(props, name);
+                        context.System.Metrics.Get<RemoteMetrics>().RemoteActorSpawnCount.Inc(new[] {_system.Id, _system.Address, msg.Kind});
+                        var response = new ActorPidResponse {Pid = pid};
                         context.Respond(response);
                     }
                     catch (ProcessNameExistException ex)
@@ -38,17 +45,6 @@ namespace Proto.Remote
                         };
                         context.Respond(response);
                     }
-                    catch (ActivatorException ex)
-                    {
-                        var response = new ActorPidResponse
-                        {
-                            StatusCode = ex.Code
-                        };
-                        context.Respond(response);
-
-                        if (!ex.DoNotThrow)
-                            throw;
-                    }
                     catch
                     {
                         var response = new ActorPidResponse
@@ -59,26 +55,11 @@ namespace Proto.Remote
 
                         throw;
                     }
+
                     break;
             }
-            return Actor.Done;
-        }
-    }
 
-    public class ActivatorUnavailableException : ActivatorException
-    {
-        public ActivatorUnavailableException() : base((int) ResponseStatusCode.Unavailable, true) { }
-    }
-
-    public class ActivatorException : Exception
-    {
-        public int Code { get; }
-        public bool DoNotThrow { get; }
-
-        public ActivatorException(int code, bool doNotThrow = false)
-        {
-            Code = code;
-            DoNotThrow = doNotThrow;
+            return Task.CompletedTask;
         }
     }
 }

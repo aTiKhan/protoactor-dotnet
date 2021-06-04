@@ -1,41 +1,71 @@
 ﻿// -----------------------------------------------------------------------
-//   <copyright file="Program.cs" company="Asynkron HB">
-//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
-//   </copyright>
+// <copyright file="Program.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
 // -----------------------------------------------------------------------
-
 using System;
 using System.Threading.Tasks;
-using Messages;
+using ClusterHelloWorld.Messages;
+using Proto;
 using Proto.Cluster;
 using Proto.Cluster.Consul;
+using Proto.Cluster.Partition;
 using Proto.Remote;
-using ProtosReflection = Messages.ProtosReflection;
+using Proto.Remote.GrpcCore;
+using static System.Threading.Tasks.Task;
+using ProtosReflection =ClusterHelloWorld.Messages.ProtosReflection;
 
 namespace Node2
 {
-    public class HelloGrain : IHelloGrain
+    public class HelloGrain : HelloGrainBase
     {
-        public Task<HelloResponse> SayHello(HelloRequest request)
-        {
-            return Task.FromResult(new HelloResponse
+        private readonly string _identity;
+
+        public HelloGrain(IContext ctx, string identity) : base(ctx) => _identity = identity;
+
+        public override Task<HelloResponse> SayHello(HelloRequest request) {
+            
+            Console.WriteLine("Got request!!");
+            var res = new HelloResponse
             {
-                Message = "Hello from typed grain"
-            });
+                Message = $"Hello from typed grain {_identity}"
+            };
+
+            return FromResult(res);
         }
     }
+
     class Program
     {
-        static void Main(string[] args)
+        private static async Task Main()
         {
-            Serialization.RegisterFileDescriptor(ProtosReflection.Descriptor);
+            //bind this interface to our concrete implementation
+            Grains.Factory<HelloGrainBase>.Create = (ctx, identity, _) => new HelloGrain(ctx, identity);
 
-            Grains.HelloGrainFactory(() => new HelloGrain());
+            var system = new ActorSystem(new ActorSystemConfig().WithDeveloperSupervisionLogging(true))
+                .WithRemote(GrpcCoreRemoteConfig
+                    .BindToLocalhost()
+                    .WithProtoMessages(ProtosReflection.Descriptor)
+                )
+                .WithCluster(ClusterConfig
+                    .Setup("MyCluster", new ConsulProvider(new ConsulProviderConfig()), new PartitionIdentityLookup())
+                    .WithHelloHelloWorldKinds()
+                );
 
-            Cluster.Start("MyCluster", "127.0.0.1", 12000, new ConsulProvider(new ConsulProviderOptions()));
-            Console.ReadLine();
-            Console.WriteLine("Shutting Down...");
-            Cluster.Shutdown();
+            await system
+                .Cluster()
+                .StartMemberAsync();
+            
+            Console.WriteLine("Started...");
+
+            Console.CancelKeyPress += async (e, y) => {
+                Console.WriteLine("Shutting Down...");
+                await system
+                    .Cluster()
+                    .ShutdownAsync();
+            };
+            
+            await Delay(-1);
         }
     }
 }

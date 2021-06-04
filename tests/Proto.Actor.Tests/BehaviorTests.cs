@@ -5,14 +5,15 @@ namespace Proto.Tests
 {
     public class BehaviorTests
     {
-        private static readonly RootContext Context = new RootContext();
-        
+        private static readonly ActorSystem System = new();
+        private static readonly RootContext Context = System.Root;
+
         [Fact]
-        public async void can_change_states()
+        public async Task can_change_states()
         {
             var testActorProps = Props.FromProducer(() => new LightBulb());
             var actor = Context.Spawn(testActorProps);
-            
+
             var response = await Context.RequestAsync<string>(actor, new PressSwitch());
             Assert.Equal("Turning on", response);
             response = await Context.RequestAsync<string>(actor, new Touch());
@@ -22,9 +23,9 @@ namespace Proto.Tests
             response = await Context.RequestAsync<string>(actor, new Touch());
             Assert.Equal("Cold", response);
         }
-        
+
         [Fact]
-        public async void can_use_global_behaviour()
+        public async Task can_use_global_behaviour()
         {
             var testActorProps = Props.FromProducer(() => new LightBulb());
             var actor = Context.Spawn(testActorProps);
@@ -36,38 +37,40 @@ namespace Proto.Tests
             response = await Context.RequestAsync<string>(actor, new Touch());
             Assert.Equal("OW!", response);
         }
-        
+
         public static PID SpawnActorFromFunc(Receive receive) => Context.Spawn(Props.FromFunc(receive));
 
         [Fact]
         public async Task pop_behavior_should_restore_pushed_behavior()
         {
             var behavior = new Behavior();
-            behavior.Become(ctx =>
-            {
-                if (ctx.Message is string)
-                {
-                    behavior.BecomeStacked(ctx2 =>
+            behavior.Become(ctx => {
+                    if (ctx.Message is string)
                     {
-                        ctx2.Respond(42);
-                        behavior.UnbecomeStacked();
-                        return Actor.Done;
-                    });
-                    ctx.Respond(ctx.Message);
+                        behavior.BecomeStacked(ctx2 => {
+                                ctx2.Respond(42);
+                                behavior.UnbecomeStacked();
+                                return Task.CompletedTask;
+                            }
+                        );
+                        ctx.Respond(ctx.Message);
+                    }
+
+                    return Task.CompletedTask;
                 }
-                return Actor.Done;
-            });
-            PID pid = SpawnActorFromFunc(behavior.ReceiveAsync);
+            );
+            var pid = SpawnActorFromFunc(behavior.ReceiveAsync);
 
             var reply = await Context.RequestAsync<string>(pid, "number");
-            var replyAfterPush = await Context.RequestAsync<int>(pid, null);
+            var replyAfterPush = await Context.RequestAsync<int>(pid, null!);
             var replyAfterPop = await Context.RequestAsync<string>(pid, "answertolifetheuniverseandeverything");
 
             Assert.Equal("number42answertolifetheuniverseandeverything", $"{reply}{replyAfterPush}{replyAfterPop}");
         }
     }
-    
-    public class LightBulb : IActor{
+
+    public class LightBulb : IActor
+    {
         private readonly Behavior _behavior;
         private bool _smashed;
 
@@ -75,6 +78,27 @@ namespace Proto.Tests
         {
             _behavior = new Behavior();
             _behavior.Become(Off);
+        }
+
+        public Task ReceiveAsync(IContext context)
+        {
+            // any "global" message handling here
+            switch (context.Message)
+            {
+                case HitWithHammer _:
+                    context.Respond("Smashed!");
+                    _smashed = true;
+                    return Task.CompletedTask;
+                case PressSwitch _ when _smashed:
+                    context.Respond("Broken");
+                    return Task.CompletedTask;
+                case Touch _ when _smashed:
+                    context.Respond("OW!");
+                    return Task.CompletedTask;
+            }
+
+            // if not handled, use behavior specific
+            return _behavior.ReceiveAsync(context);
         }
 
         private Task Off(IContext context)
@@ -89,10 +113,10 @@ namespace Proto.Tests
                     context.Respond("Cold");
                     break;
             }
-            
-            return Actor.Done;
+
+            return Task.CompletedTask;
         }
-        
+
         private Task On(IContext context)
         {
             switch (context.Message)
@@ -105,32 +129,20 @@ namespace Proto.Tests
                     context.Respond("Hot!");
                     break;
             }
-            
-            return Actor.Done;
-        }
 
-        public Task ReceiveAsync(IContext context)
-        {
-            // any "global" message handling here
-            switch (context.Message)
-            {
-                case HitWithHammer _:
-                    context.Respond("Smashed!");
-                    _smashed = true;
-                    return Actor.Done;
-                case PressSwitch _ when _smashed:
-                    context.Respond("Broken");
-                    return Actor.Done;
-                case Touch _ when _smashed:
-                    context.Respond("OW!");
-                    return Actor.Done;
-            }
-            // if not handled, use behavior specific
-            return _behavior.ReceiveAsync(context);
+            return Task.CompletedTask;
         }
     }
 
-    public class PressSwitch {}
-    public class Touch {}
-    public class HitWithHammer {}
+    public class PressSwitch
+    {
+    }
+
+    public class Touch
+    {
+    }
+
+    public class HitWithHammer
+    {
+    }
 }

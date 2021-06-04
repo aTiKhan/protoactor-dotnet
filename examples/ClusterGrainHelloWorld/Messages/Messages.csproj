@@ -1,22 +1,21 @@
-﻿<Project Sdk="Microsoft.NET.Sdk" ToolsVersion="15.0">
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
-    <OutputType>Library</OutputType>
-  </PropertyGroup>
-  <PropertyGroup>
-    <OutputType>library</OutputType>
+    <TargetFramework>net5.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="build.bat" />
-    <None Include="Protos.proto" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Google.Protobuf" Version="3.7.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.15.7" />
+    <PackageReference Include="Proto.Cluster" Version="0.16.1-alpha.0.107" />
+    <PackageReference Include="ProtoGrainGenerator" Version="0.17.0" />
     <PackageReference Include="System.ValueTuple" Version="4.5.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.36.4" PrivateAssets="All" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\..\src\Proto.Actor\Proto.Actor.csproj" />
-    <ProjectReference Include="..\..\..\src\Proto.Cluster\Proto.Cluster.csproj" />
-    <ProjectReference Include="..\..\..\src\Proto.Mailbox\Proto.Mailbox.csproj" />
+    <Protobuf Include="Protos.proto" />
   </ItemGroup>
+<!--  <ItemGroup>-->
+<!--    <ProjectReference Include="..\..\..\protobuf\ProtoGrainGenerator\ProtoGrainGenerator.csproj" />-->
+<!--  </ItemGroup>-->
+
 </Project>

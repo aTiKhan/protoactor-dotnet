@@ -1,64 +1,106 @@
-﻿using System;
+﻿// -----------------------------------------------------------------------
+// <copyright file="Program.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
+// -----------------------------------------------------------------------
+using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using chat.messages;
-using Jaeger;
-using Jaeger.Samplers;
-using OpenTracing.Util;
 using Proto;
-using Proto.OpenTracing;
 using Proto.Remote;
+using Proto.Remote.GrpcCore;
+using static Proto.Remote.GrpcCore.GrpcCoreRemoteConfig;
 
-class Program
+namespace Server
 {
-    static void Main(string[] args)
+    static class Program
     {
-        var tracer = new Tracer.Builder("Proto.Chat.Server")
-            .WithSampler(new ConstSampler(true))
-            .Build();
-        GlobalTracer.Register(tracer);
+        private static RootContext context;
 
-        SpanSetup spanSetup = (span, message) => span.Log(message?.ToString());
-
-        var context = new RootContext();
-        Serialization.RegisterFileDescriptor(ChatReflection.Descriptor);
-        Remote.Start("127.0.0.1", 8000);
-
-        var clients = new HashSet<PID>();
-        var props = Props.FromFunc(ctx =>
+        private static void Main()
         {
-            switch (ctx.Message)
-            {
-                case Connect connect:
-                    Console.WriteLine($"Client {connect.Sender} connected");
-                    clients.Add(connect.Sender);
-                    ctx.Send(connect.Sender, new Connected { Message = "Welcome!" });
-                    break;
-                case SayRequest sayRequest:
-                    foreach (var client in clients)
-                    {
-                        ctx.Send(client, new SayResponse
-                        {
-                            UserName = sayRequest.UserName,
-                            Message = sayRequest.Message
-                        });
-                    }
-                    break;
-                case NickRequest nickRequest:
-                    foreach (var client in clients)
-                    {
-                        ctx.Send(client, new NickResponse
-                        {
-                            OldUserName = nickRequest.OldUserName,
-                            NewUserName = nickRequest.NewUserName
-                        });
-                    }
-                    break;
-            }
-            return Actor.Done;
-        })
-        .WithOpenTracing(spanSetup, spanSetup);
+            InitializeActorSystem();
+            SpawnServer();
 
-        context.SpawnNamed(props, "chatserver");
-        Console.ReadLine();
+            Console.ReadLine();
+        }
+
+        private static void InitializeActorSystem()
+        {
+            var config =
+                BindToLocalhost(8000)
+                    .WithProtoMessages(ChatReflection.Descriptor)
+                    .WithRemoteDiagnostics(true);
+
+            var system
+                = new ActorSystem()
+                    .WithRemote(config);
+
+            system
+                .Remote()
+                .StartAsync();
+
+            context = system.Root;
+        }
+
+        private static void SpawnServer()
+        {
+            var clients = new HashSet<PID>();
+
+            context.SpawnNamed(
+                Props.FromFunc(
+                    ctx => {
+                        switch (ctx.Message)
+                        {
+                            case Connect connect:
+                                Console.WriteLine($"Client {connect.Sender} connected");
+
+                                clients.Add(connect.Sender);
+
+                                ctx.Send(
+                                    connect.Sender,
+                                    new Connected
+                                    {
+                                        Message = "Welcome!"
+                                    }
+                                );
+                                break;
+                            case SayRequest sayRequest:
+                                foreach (var client in clients)
+                                {
+                                    ctx.Send(
+                                        client,
+                                        new SayResponse
+                                        {
+                                            UserName = sayRequest.UserName,
+                                            Message = sayRequest.Message
+                                        }
+                                    );
+                                }
+
+                                break;
+                            case NickRequest nickRequest:
+                                foreach (var client in clients)
+                                {
+                                    ctx.Send(
+                                        client,
+                                        new NickResponse
+                                        {
+                                            OldUserName = nickRequest.OldUserName,
+                                            NewUserName = nickRequest.NewUserName
+                                        }
+                                    );
+                                }
+
+                                break;
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                ),
+                "chatserver"
+            );
+        }
     }
 }

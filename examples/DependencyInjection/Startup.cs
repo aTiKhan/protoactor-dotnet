@@ -1,44 +1,53 @@
-using System;
-using System.Threading;
+// -----------------------------------------------------------------------
+// <copyright file="Startup.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
+// -----------------------------------------------------------------------
+using DependencyInjection.Controllers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
+using Microsoft.OpenApi.Models;
 using Proto;
+using Proto.DependencyInjection;
 
 namespace DependencyInjection
 {
     public class Startup
     {
+        public Startup(IConfiguration configuration) => Configuration = configuration;
+
+        public IConfiguration Configuration { get; }
+
+        // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
-            services.AddProtoActor(props =>
-            {
-                //attached console tracing
-                props.RegisterProps<DIActor>(p => p.WithReceiverMiddleware(next => async (c,env) =>
-                {
-                    Console.WriteLine($"enter {env.Message.GetType().FullName}");
-                    await next(c, env);
-                    Console.WriteLine($"exit {env.Message.GetType().FullName}");
-                }));
-            });
-            services.AddTransient<IActorManager, ActorManager>();
+            services.AddSingleton(serviceProvider => new ActorSystem().WithServiceProvider(serviceProvider));
+            services.AddTransient<DependencyInjectedActor>();
+            services.AddControllers();
+            services.AddSwaggerGen(c => { c.SwaggerDoc("v1", new OpenApiInfo {Title = "DependencyInjection", Version = "v1"}); }
+            );
         }
 
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory,
-            IApplicationLifetime appLifetime)
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
-            loggerFactory.AddConsole(LogLevel.Debug);
-            //attach logger to proto logging just in case
-            Proto.Log.SetLoggerFactory(loggerFactory);
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+                app.UseSwagger();
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "DependencyInjection v1"));
+            }
 
-            //This is only for demo purposes done in the service initialization
-            var actorManager = app.ApplicationServices.GetRequiredService<IActorManager>();
-            actorManager.Activate();
-            //never do this
-            Thread.Sleep(TimeSpan.FromSeconds(2));
-            //notice, there is no second creation!
-            actorManager.Activate();
+            app.UseHttpsRedirection();
+
+            app.UseRouting();
+
+            app.UseAuthorization();
+
+            app.UseEndpoints(endpoints => { endpoints.MapControllers(); });
         }
     }
 }

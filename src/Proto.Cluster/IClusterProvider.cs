@@ -1,19 +1,21 @@
 ﻿// -----------------------------------------------------------------------
-//   <copyright file="IClusterProvider.cs" company="Asynkron HB">
-//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
-//   </copyright>
+// <copyright file="IClusterProvider.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
 // -----------------------------------------------------------------------
-
 using System.Threading.Tasks;
+using JetBrains.Annotations;
+using Proto.Cluster.Data;
 
 namespace Proto.Cluster
 {
+    [PublicAPI]
     public interface IClusterProvider
     {
-        Task RegisterMemberAsync(string clusterName, string host, int port, string[] kinds, IMemberStatusValue statusValue, IMemberStatusValueSerializer serializer);
-        void MonitorMemberStatusChanges();
-        Task UpdateMemberStatusValueAsync(IMemberStatusValue statusValue);
-        Task DeregisterMemberAsync();
-        Task Shutdown();
+        Task StartMemberAsync(Cluster cluster);
+
+        Task StartClientAsync(Cluster cluster);
+
+        Task ShutdownAsync(bool graceful);
     }
 }

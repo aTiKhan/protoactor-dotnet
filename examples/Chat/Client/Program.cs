@@ -1,76 +1,126 @@
-﻿using System;
+﻿// -----------------------------------------------------------------------
+// <copyright file="Program.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
+// -----------------------------------------------------------------------
+using System;
+using System.Threading.Tasks;
 using chat.messages;
-using Jaeger;
-using Jaeger.Samplers;
-using OpenTracing.Util;
 using Proto;
-using Proto.OpenTracing;
 using Proto.Remote;
+using Proto.Remote.GrpcCore;
+using static Proto.Remote.GrpcCore.GrpcCoreRemoteConfig;
 
-class Program
+namespace Client
 {
-    static void Main(string[] args)
+    static class Program
     {
-        var tracer = new Tracer.Builder("Proto.Chat.Client")
-            .WithSampler(new ConstSampler(true))
-            .Build();
+        private static RootContext context;
 
-        SpanSetup spanSetup = (span, message) => span.Log(message?.ToString());
-        var openTracingMiddleware = OpenTracingExtensions.OpenTracingSenderMiddleware(tracer);
+        private static PID client;
 
-        Serialization.RegisterFileDescriptor(ChatReflection.Descriptor);
-        Remote.Start("127.0.0.1", 0);
-        var server = new PID("127.0.0.1:8000", "chatserver");
-        var context = new RootContext(default, openTracingMiddleware);
+        private static PID server;
 
-        var props = Props.FromFunc(ctx =>
+        private static void Main()
         {
-            switch (ctx.Message)
-            {
-                case Connected connected:
-                    Console.WriteLine(connected.Message);
-                    break;
-                case SayResponse sayResponse:
-                    Console.WriteLine($"{sayResponse.UserName} {sayResponse.Message}");
-                    break;
-                case NickResponse nickResponse:
-                    Console.WriteLine($"{nickResponse.OldUserName} is now {nickResponse.NewUserName}");
-                    break;
-            }
-            return Actor.Done;
-        })
-        .WithOpenTracing(spanSetup, spanSetup, tracer);
+            InitializeActorSystem();
+            SpawnClient();
+            ObtainServerPid();
+            ConnectToServer();
+            EvaluateCommands();
+        }
 
-        var client = context.Spawn(props);
-        context.Send(server, new Connect
+        private static void InitializeActorSystem()
         {
-            Sender = client
-        });
-        var nick = "Alex";
-        while (true)
-        {
-            var text = Console.ReadLine();
-            if (text.Equals("/exit"))
-            {
-                return;
-            }
-            if (text.StartsWith("/nick "))
-            {
-                var t = text.Split(' ')[1];
-                context.Send(server, new NickRequest
+            var config =
+                BindToLocalhost()
+                    .WithProtoMessages(ChatReflection.Descriptor);
+
+            var system =
+                new ActorSystem()
+                    .WithRemote(config);
+
+            system
+                .Remote()
+                .StartAsync();
+
+            context = system.Root;
+        }
+
+        private static void SpawnClient() =>
+            client = context.Spawn(
+                Props.FromFunc(
+                    ctx => {
+                        switch (ctx.Message)
+                        {
+                            case Connected connected:
+                                Console.WriteLine(connected.Message);
+                                break;
+                            case SayResponse sayResponse:
+                                Console.WriteLine($"{sayResponse.UserName} {sayResponse.Message}");
+                                break;
+                            case NickResponse nickResponse:
+                                Console.WriteLine($"{nickResponse.OldUserName} is now {nickResponse.NewUserName}");
+                                break;
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                )
+            );
+
+        private static void ObtainServerPid() =>
+            server = PID.FromAddress("127.0.0.1:8000", "chatserver");
+
+        private static void ConnectToServer() =>
+            context.Send(
+                server,
+                new Connect
                 {
-                    OldUserName = nick,
-                    NewUserName = t
-                });
-                nick = t;
-            }
-            else
+                    Sender = client
+                }
+            );
+
+        private static void EvaluateCommands()
+        {
+            var nick = "Alex";
+
+            while (true)
             {
-                context.Send(server, new SayRequest
+                var text = Console.ReadLine();
+
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
+
+                if (text.Equals("/exit"))
+                    return;
+
+                if (text.StartsWith("/nick "))
                 {
-                    UserName = nick,
-                    Message = text
-                });
+                    var t = text.Split(' ')[1];
+
+                    context.Send(
+                        server,
+                        new NickRequest
+                        {
+                            OldUserName = nick,
+                            NewUserName = t
+                        }
+                    );
+
+                    nick = t;
+
+                    continue;
+                }
+
+                context.Send(
+                    server,
+                    new SayRequest
+                    {
+                        UserName = nick,
+                        Message = text
+                    }
+                );
             }
         }
     }

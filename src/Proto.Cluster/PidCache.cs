@@ -1,118 +1,99 @@
-﻿// -----------------------------------------------------------------------
-//   <copyright file="PidCache.cs" company="Asynkron HB">
-//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
-//   </copyright>
 // -----------------------------------------------------------------------
-
+// <copyright file="PidCache.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
+// -----------------------------------------------------------------------
+using System;
 using System.Collections.Concurrent;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Proto.Cluster
 {
-    internal static class PidCache
+    public class PidCache
     {
-        private static PID _watcher;
-        private static Subscription<object> _clusterTopologyEvnSub;
+        private readonly ICollection<KeyValuePair<ClusterIdentity, PID>> _cacheCollection;
+        private readonly ConcurrentDictionary<ClusterIdentity, PID> _cacheDict;
 
-        private static readonly ConcurrentDictionary<string, PID> Cache = new ConcurrentDictionary<string, PID>();
-        private static readonly ConcurrentDictionary<string, string> ReverseCache = new ConcurrentDictionary<string, string>();
-
-        internal static void Setup()
+        public PidCache()
         {
-            var props = Props.FromProducer(() => new PidCacheWatcher()).WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy);
-            _watcher = RootContext.Empty.SpawnNamed(props, "PidCacheWatcher");
-            _clusterTopologyEvnSub = Actor.EventStream.Subscribe<MemberStatusEvent>(OnMemberStatusEvent);
+            _cacheDict = new ConcurrentDictionary<ClusterIdentity, PID>();
+            _cacheCollection = _cacheDict;
         }
 
-        internal static void Stop()
+        public bool TryGet(ClusterIdentity clusterIdentity, out PID pid)
         {
-            RootContext.Empty.Stop(_watcher);
-            Actor.EventStream.Unsubscribe(_clusterTopologyEvnSub.Id);
-        }
+            if (clusterIdentity is null) throw new ArgumentNullException(nameof(clusterIdentity));
 
-        internal static void OnMemberStatusEvent(MemberStatusEvent evn)
-        {
-            if (evn is MemberLeftEvent || evn is MemberRejoinedEvent)
+            if (clusterIdentity.CachedPid is { } identityCachedPid)
             {
-                RemoveCacheByMemberAddress(evn.Address);
-            }
-        }
-
-        internal static bool TryGetCache(string name, out PID pid)
-        {
-            return Cache.TryGetValue(name, out pid);
-        }
-
-        internal static bool TryAddCache(string name, PID pid)
-        {
-            if (Cache.TryAdd(name, pid))
-            {
-                var key = pid.ToShortString();
-                ReverseCache.TryAdd(key, name);
-                RootContext.Empty.Send(_watcher, new WatchPidRequest(pid));
+                //If the PID is already cached using ClusterIdentity, we can skip the lookup altogether
+                pid = identityCachedPid;
                 return true;
             }
+            return _cacheDict.TryGetValue(clusterIdentity, out pid);
+        }
+
+        public bool TryAdd(ClusterIdentity clusterIdentity, PID pid)
+        {
+            if (clusterIdentity is null) throw new ArgumentNullException(nameof(clusterIdentity));
+
+            if (pid is null) throw new ArgumentNullException(nameof(pid));
+
+            if (!_cacheDict.TryAdd(clusterIdentity, pid)) return false;
+
+            clusterIdentity.CachedPid = pid;
+            return true;
+        }
+
+        public bool TryUpdate(ClusterIdentity clusterIdentity, PID newPid, PID existingPid)
+        {
+            if (clusterIdentity is null) throw new ArgumentNullException(nameof(clusterIdentity));
+
+            if (newPid is null) throw new ArgumentNullException(nameof(newPid));
+
+            if (existingPid is null) throw new ArgumentNullException(nameof(existingPid));
+
+            if (!_cacheDict.TryUpdate(clusterIdentity, newPid, existingPid)) return false;
+
+            clusterIdentity.CachedPid = newPid;
+            return true;
+        }
+
+        public bool TryRemove(ClusterIdentity clusterIdentity)
+        {
+            if (clusterIdentity is null) throw new ArgumentNullException(nameof(clusterIdentity));
+
+            clusterIdentity.CachedPid = null;
+            return _cacheDict.TryRemove(clusterIdentity, out _);
+        }
+
+        public bool RemoveByVal(ClusterIdentity clusterIdentity, PID pid)
+        {
+            if (clusterIdentity.CachedPid?.Equals(pid) == true)
+            {
+                clusterIdentity.CachedPid = null;
+            }
+
+            if (_cacheDict.TryGetValue(clusterIdentity, out var existingPid) && existingPid.Id == pid.Id &&
+                existingPid.Address == pid.Address)
+                return _cacheCollection.Remove(new KeyValuePair<ClusterIdentity, PID>(clusterIdentity, existingPid));
+
             return false;
         }
 
-        internal static void RemoveCacheByPid(PID pid)
+        public void RemoveByMember(Member member) => RemoveByPredicate(pair => member.Address.Equals(pair.Value.Address));
+
+        private void RemoveByPredicate(Func<KeyValuePair<ClusterIdentity, PID>, bool> predicate)
         {
-            var key = pid.ToShortString();
-            if (ReverseCache.TryRemove(key, out var name))
+            var toBeRemoved = _cacheDict.Where(predicate).ToList();
+            if (toBeRemoved.Count == 0) return;
+
+            foreach (var item in toBeRemoved)
             {
-                Cache.TryRemove(name, out _);
+                item.Key.CachedPid = null;
+                _cacheCollection.Remove(item);
             }
-        }
-
-        internal static void RemoveCacheByName(string name)
-        {
-            if(Cache.TryRemove(name, out var pid))
-            {
-                ReverseCache.TryRemove(pid.ToShortString(), out _);
-            }
-        }
-
-        internal static void RemoveCacheByMemberAddress(string memberAddress)
-        {
-            foreach (var (name, pid) in Cache.ToArray())
-            {
-                if (pid.Address == memberAddress)
-                {
-                    Cache.TryRemove(name, out _);
-                    var key = pid.ToShortString();
-                    ReverseCache.TryRemove(key, out _);
-                }
-            }
-        }
-    }
-
-    internal class WatchPidRequest
-    {
-        internal PID Pid { get; }
-
-        public WatchPidRequest(PID pid) { Pid = pid; }
-    }
-
-    internal class PidCacheWatcher : IActor
-    {
-        private readonly ILogger _logger = Log.CreateLogger<PidCacheWatcher>();
-
-        public Task ReceiveAsync(IContext context)
-        {
-            switch (context.Message)
-            {
-                case Started _:
-                    _logger.LogDebug("Started PidCacheWatcher");
-                    break;
-                case WatchPidRequest msg:
-                    context.Watch(msg.Pid);
-                    break;
-                case Terminated msg:
-                    PidCache.RemoveCacheByPid(msg.Who);
-                    break;
-            }
-            return Actor.Done;
         }
     }
 }

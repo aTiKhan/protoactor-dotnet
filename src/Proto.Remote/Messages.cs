@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
-//   <copyright file="Messages.cs" company="Asynkron HB">
-//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
+//   <copyright file="Messages.cs" company="Asynkron AB">
+//       Copyright (C) 2015-2020 Asynkron AB All rights reserved
 //   </copyright>
 // -----------------------------------------------------------------------
 
@@ -8,89 +8,30 @@ using System;
 
 namespace Proto.Remote
 {
-    public sealed class EndpointTerminatedEvent
+    public sealed record EndpointTerminatedEvent
     {
-        public string Address { get; set; }
-    }
-    public sealed class EndpointConnectedEvent
-    {
-        public string Address { get; set; }
+        public string Address { get; set; } = null!;
+
+        public override string ToString() => $"EndpointTerminatedEvent: {Address}";
     }
 
-    public class RemoteTerminate
+    public sealed record EndpointConnectedEvent
     {
-        public RemoteTerminate(PID watcher, PID watchee)
-        {
-            Watcher = watcher;
-            Watchee = watchee;
-        }
-
-        public PID Watcher { get; }
-        public PID Watchee { get; }
+        public string Address { get; set; } = null!;
     }
 
-    public class RemoteWatch
+    public sealed record EndpointErrorEvent
     {
-        public RemoteWatch(PID watcher, PID watchee)
-        {
-            Watcher = watcher;
-            Watchee = watchee;
-        }
-
-        public PID Watcher { get; }
-        public PID Watchee { get; }
+        public string Address { get; set; } = null!;
+        public Exception Exception { get; set; } = null!;
     }
 
-    public class RemoteUnwatch
-    {
-        public RemoteUnwatch(PID watcher, PID watchee)
-        {
-            Watcher = watcher;
-            Watchee = watchee;
-        }
+    public sealed record RemoteTerminate(PID Watcher, PID Watchee);
 
-        public PID Watcher { get; }
-        public PID Watchee { get; }
-    }
+    public sealed record RemoteWatch(PID Watcher, PID Watchee);
 
-    public class RemoteDeliver
-    {
-        public RemoteDeliver(Proto.MessageHeader header, object message, PID target, PID sender, int serializerId)
-        {
-            Header = header;
-            Message = message;
-            Target = target;
-            Sender = sender;
-            SerializerId = serializerId;
-        }
+    public sealed record RemoteUnwatch(PID Watcher, PID Watchee);
 
-        public Proto.MessageHeader Header { get; }
-        public object Message { get; }
-        public PID Target { get; }
-        public PID Sender { get; }
-
-        public int SerializerId { get; }
-    }
-
-    public class JsonMessage
-    {
-        //NOTE: typename should not be checked against available typenames on send
-        //as the message might only exist on the receiveing side
-        public JsonMessage(string typeName, string json)
-        {
-            TypeName = typeName ?? throw new ArgumentNullException(nameof(typeName));
-            Json = json ?? throw new ArgumentNullException(nameof(json));
-        }
-
-        public string Json { get; set; }
-        public string TypeName { get; set; }
-    }
-
-    public sealed partial class ActorPidResponse
-    {
-        public static ActorPidResponse TimeOut = new ActorPidResponse() { StatusCode = (int)ResponseStatusCode.Timeout };
-        public static ActorPidResponse Unavailable = new ActorPidResponse() { StatusCode = (int)ResponseStatusCode.Unavailable };
-        public static ActorPidResponse Err = new ActorPidResponse() { StatusCode = (int)ResponseStatusCode.Error };
-    }
+    public sealed record RemoteDeliver (Proto.MessageHeader Header, object Message, PID Target, PID Sender);
 
 }

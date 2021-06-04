@@ -1,34 +1,35 @@
 ﻿// -----------------------------------------------------------------------
-//  <copyright file="Program.cs" company="Asynkron HB">
-//      Copyright (C) 2015-2018 Asynkron HB All rights reserved
-//  </copyright>
+// <copyright file="Program.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
 // -----------------------------------------------------------------------
-
 using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Proto;
 using Microsoft.Extensions.Logging;
+using Proto;
 
 class Program
 {
-    static void Main(string[] args)
+    private static void Main()
     {
-        var context = new RootContext();
-        Log.SetLoggerFactory(new LoggerFactory()
-            .AddConsole(LogLevel.Debug));
+        var context = new RootContext(new ActorSystem());
+        Log.SetLoggerFactory(LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(LogLevel.Debug)));
 
-        var props = Props.FromProducer(() => new ParentActor()).WithChildSupervisorStrategy(new OneForOneStrategy(Decider.Decide, 1, null));
+        var props = Props.FromProducer(() => new ParentActor())
+            .WithChildSupervisorStrategy(new OneForOneStrategy(Decider.Decide, 1, null));
 
         var actor = context.Spawn(props);
-        
-        context.Send(actor,new Hello
-        {
-            Who = "Alex"
-        });
-        context.Send(actor,new Recoverable());
-        context.Send(actor,new Fatal());
+
+        context.Send(
+            actor, new Hello
+            {
+                Who = "Alex"
+            }
+        );
+        context.Send(actor, new Recoverable());
+        context.Send(actor, new Fatal());
         //why wait?
         //Stop is a system message and is not processed through the user message mailbox
         //thus, it will be handled _before_ any user message
@@ -38,37 +39,30 @@ class Program
         Console.ReadLine();
     }
 
-    internal class Decider
+    private static class Decider
     {
         public static SupervisorDirective Decide(PID pid, Exception reason)
-        {
-            switch (reason)
+            => reason switch
             {
-                case RecoverableException _:
-                    return SupervisorDirective.Restart;
-                case FatalException _:
-                    return SupervisorDirective.Stop;
-                default:
-                    return SupervisorDirective.Escalate;
-
-            }
-        }
+                RecoverableException _ => SupervisorDirective.Restart,
+                FatalException _       => SupervisorDirective.Stop,
+                _                      => SupervisorDirective.Escalate
+            };
     }
 
-    internal class ParentActor : IActor
+    private class ParentActor : IActor
     {
         public Task ReceiveAsync(IContext context)
         {
             PID child;
-            if (context.Children == null || context.Children.Count == 0)
+
+            if (context.Children is null || context.Children.Count == 0)
             {
                 var props = Props.FromProducer(() => new ChildActor());
                 child = context.Spawn(props);
             }
             else
-            {
                 child = context.Children.First();
-            }
 
             switch (context.Message)
             {
@@ -82,48 +76,61 @@ class Program
                     break;
             }
 
-            return Actor.Done;
+            return Task.CompletedTask;
         }
     }
 
-    internal class ChildActor : IActor
+    private class ChildActor : IActor
     {
-        private ILogger logger = Log.CreateLogger<ChildActor>();
+        private readonly ILogger _logger = Log.CreateLogger<ChildActor>();
 
         public Task ReceiveAsync(IContext context)
         {
             switch (context.Message)
             {
                 case Hello r:
-                    logger.LogDebug($"Hello {r.Who}");
+                    _logger.LogDebug($"Hello {r.Who}");
                     break;
                 case Recoverable _:
                     throw new RecoverableException();
                 case Fatal _:
                     throw new FatalException();
                 case Started _:
-                    logger.LogDebug("Started, initialize actor here");
+                    _logger.LogDebug("Started, initialize actor here");
                     break;
                 case Stopping _:
-                    logger.LogDebug("Stopping, actor is about shut down");
+                    _logger.LogDebug("Stopping, actor is about shut down");
                     break;
                 case Stopped _:
-                    logger.LogDebug("Stopped, actor and it's children are stopped");
+                    _logger.LogDebug("Stopped, actor and it's children are stopped");
                     break;
                 case Restarting _:
-                    logger.LogDebug("Restarting, actor is about restart");
+                    _logger.LogDebug("Restarting, actor is about restart");
                     break;
             }
-            return Actor.Done;
+
+            return Task.CompletedTask;
         }
     }
 
-    internal class Hello
+    private class Hello
     {
         public string Who;
     }
-    internal class RecoverableException : Exception { }
-    internal class FatalException : Exception { }
-    internal class Fatal { }
-    internal class Recoverable { }
+
+    private class RecoverableException : Exception
+    {
+    }
+
+    private class FatalException : Exception
+    {
+    }
+
+    private class Fatal
+    {
+    }
+
+    private class Recoverable
+    {
+    }
 }

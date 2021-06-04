@@ -1,68 +1,110 @@
 ﻿// -----------------------------------------------------------------------
-//   <copyright file="Cluster.cs" company="Asynkron HB">
-//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
-//   </copyright>
+// <copyright file="ClusterConfig.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
 // -----------------------------------------------------------------------
-
 using System;
-using Proto.Remote;
+using System.Collections.Immutable;
+using System.Linq;
+using JetBrains.Annotations;
+using Proto.Cluster.Identity;
 
 namespace Proto.Cluster
 {
-    public class ClusterConfig
+    [PublicAPI]
+    public record ClusterConfig
     {
-        public string Name { get; }
-        public string Address { get; }
-        public int Port { get; }
+        private ClusterConfig(string clusterName, IClusterProvider clusterProvider, IIdentityLookup identityLookup)
+        {
+            ClusterName = clusterName ?? throw new ArgumentNullException(nameof(clusterName));
+            ClusterProvider = clusterProvider ?? throw new ArgumentNullException(nameof(clusterProvider));
+            TimeoutTimespan = TimeSpan.FromSeconds(5);
+            ActorRequestTimeout = TimeSpan.FromSeconds(5);
+            MaxNumberOfEventsInRequestLogThrottlePeriod = 3;
+            RequestLogThrottlePeriod = TimeSpan.FromSeconds(2);
+            HeartBeatInterval = TimeSpan.FromSeconds(30);
+            HeartBeatTimeout = TimeSpan.FromSeconds(5);
+            ClusterRequestDeDuplication = true;
+            ClusterRequestDeDuplicationWindow = TimeSpan.FromSeconds(30);
+            IdentityLookup = identityLookup;
+            MemberStrategyBuilder = (_, _) => new SimpleMemberStrategy();
+            PubSubBatchSize = 2000;
+        }
+
+        public Func<Cluster, string, IMemberStrategy> MemberStrategyBuilder { get; init; }
+        
+        public string ClusterName { get; }
+
+        public ImmutableList<ClusterKind> ClusterKinds { get; init; } = ImmutableList<ClusterKind>.Empty;
+
         public IClusterProvider ClusterProvider { get; }
 
-        public RemoteConfig RemoteConfig { get; private set; }
-        public TimeSpan TimeoutTimespan { get; private set; }
-        public IMemberStatusValue InitialMemberStatusValue { get; private set; }
-        public IMemberStatusValueSerializer MemberStatusValueSerializer { get; private set; }
-        public Func<string, IMemberStrategy> MemberStrategyBuilder { get; private set; }
+        public int PubSubBatchSize { get; init; }
+        public TimeSpan TimeoutTimespan { get; init; }
+        public TimeSpan ActorRequestTimeout { get; init; }
+        public TimeSpan RequestLogThrottlePeriod { get; init; }
+        public int MaxNumberOfEventsInRequestLogThrottlePeriod { get; init; }
 
-        public ClusterConfig(string name, string address, int port, IClusterProvider cp)
-        {
-            Name = name ?? throw new ArgumentNullException(nameof(name));
-            Address = address ?? throw new ArgumentNullException(nameof(address));
-            Port = port;
-            ClusterProvider = cp ?? throw new ArgumentNullException(nameof(cp));
-            
-            RemoteConfig = new RemoteConfig();
-            TimeoutTimespan = TimeSpan.FromSeconds(5);
-            MemberStatusValueSerializer = new NullMemberStatusValueSerializer();
-            MemberStrategyBuilder = kind => new SimpleMemberStrategy();
-        }
+        public IIdentityLookup IdentityLookup { get; }
+        public TimeSpan HeartBeatInterval { get; init; }
+        public TimeSpan HeartBeatTimeout { get; init; }
 
-        public ClusterConfig WithRemoteConfig(RemoteConfig remoteConfig)
-        {
-            RemoteConfig = remoteConfig;
-            return this;
-        }
+        public bool ClusterRequestDeDuplication { get; init; }
 
-        public ClusterConfig WithTimeoutSeconds(int timeoutSeconds)
-        {
-            TimeoutTimespan = TimeSpan.FromSeconds(timeoutSeconds);
-            return this;
-        }
+        public TimeSpan ClusterRequestDeDuplicationWindow { get; init; }
 
-        public ClusterConfig WithInitialMemberStatusValue(IMemberStatusValue statusValue)
-        {
-            InitialMemberStatusValue = statusValue;
-            return this;
-        }
+        public Func<Cluster, IClusterContext> ClusterContextProducer { get; init; } =
+            c => new DefaultClusterContext(c.IdentityLookup, c.PidCache, c.Config.ToClusterContextConfig(),c.System.Shutdown);
 
-        public ClusterConfig WithMemberStatusValueSerializer(IMemberStatusValueSerializer serializer)
-        {
-            MemberStatusValueSerializer = serializer;
-            return this;
-        }
+        public ClusterConfig WithTimeout(TimeSpan timeSpan) =>
+            this with {TimeoutTimespan = timeSpan};
 
-        public ClusterConfig WithMemberStrategyBuilder(Func<string, IMemberStrategy> builder)
-        {
-            MemberStrategyBuilder = builder;
-            return this;
-        }
+        public ClusterConfig WithActorRequestTimeout(TimeSpan timeSpan) =>
+            this with {ActorRequestTimeout = timeSpan};
+
+        public ClusterConfig WithRequestLogThrottlePeriod(TimeSpan timeSpan) =>
+            this with {RequestLogThrottlePeriod = timeSpan};
+
+        public ClusterConfig WithHeartBeatInterval(TimeSpan timeSpan) =>
+            this with { HeartBeatInterval = timeSpan };
+
+        public ClusterConfig WithHeartBeatTimeout(TimeSpan timeSpan) =>
+            this with { HeartBeatTimeout = timeSpan };
+
+        public ClusterConfig WithPubSubBatchSize(int batchSize) =>
+            this with {PubSubBatchSize = batchSize};
+
+        public ClusterConfig WithMaxNumberOfEventsInRequestLogThrottlePeriod(int max) =>
+            this with {MaxNumberOfEventsInRequestLogThrottlePeriod = max};
+
+        public ClusterConfig WithClusterKind(string kind, Props prop)
+            => WithClusterKind(new ClusterKind(kind, prop));
+
+        public ClusterConfig WithClusterKind(string kind, Props prop, Func<Cluster, IMemberStrategy> strategyBuilder) =>
+            WithClusterKind(new ClusterKind(kind, prop) {StrategyBuilder = strategyBuilder});
+
+        public ClusterConfig WithClusterKinds(params (string kind, Props prop)[] knownKinds) =>
+            WithClusterKinds(knownKinds.Select(k => new ClusterKind(k.kind, k.prop)).ToArray());
+
+        public ClusterConfig WithClusterKinds(params (string kind, Props prop, Func<Cluster, IMemberStrategy> strategyBuilder)[] knownKinds) =>
+            WithClusterKinds(knownKinds.Select(k => new ClusterKind(k.kind, k.prop) {StrategyBuilder = k.strategyBuilder}).ToArray());
+
+        public ClusterConfig WithClusterKind(ClusterKind clusterKind) => WithClusterKinds(clusterKind);
+
+        public ClusterConfig WithClusterKinds(params ClusterKind[] clusterKinds)
+            => this with {ClusterKinds = ClusterKinds.AddRange(clusterKinds)};
+        
+        public ClusterConfig WithMemberStrategyBuilder(Func<Cluster, string, IMemberStrategy> builder) =>
+            this with {MemberStrategyBuilder = builder};
+
+        public ClusterConfig WithClusterContextProducer(Func<Cluster, IClusterContext> producer) =>
+            this with {ClusterContextProducer = producer};
+
+        public static ClusterConfig Setup(
+            string clusterName,
+            IClusterProvider clusterProvider,
+            IIdentityLookup identityLookup
+        ) =>
+            new(clusterName, clusterProvider, identityLookup);
     }
 }

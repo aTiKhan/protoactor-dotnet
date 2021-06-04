@@ -1,22 +1,17 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk" ToolsVersion="15.0">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>netcoreapp2.0</TargetFramework>
+    <TargetFramework>net5.0</TargetFramework>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <LangVersion>9</LangVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Content Include="runtimeconfig.template.json" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="6.0.0-preview.2.21154.6" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Google.Protobuf" Version="3.7.0" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="2.2.0" />
-    <PackageReference Include="System.ValueTuple" Version="4.5.0" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\..\..\src\ClusterProviders\Proto.Cluster.Consul\Proto.Cluster.Consul.csproj" />
-    <ProjectReference Include="..\..\..\src\Proto.Actor\Proto.Actor.csproj" />
-    <ProjectReference Include="..\..\..\src\Proto.Cluster\Proto.Cluster.csproj" />
-    <ProjectReference Include="..\..\..\src\Proto.Mailbox\Proto.Mailbox.csproj" />
-    <ProjectReference Include="..\..\..\src\Proto.Remote\Proto.Remote.csproj" />
+    <ProjectReference Include="..\..\..\src\Proto.Cluster.Consul\Proto.Cluster.Consul.csproj" />
     <ProjectReference Include="..\Messages\Messages.csproj" />
+    <ProjectReference Include="..\..\..\src\Proto.Remote.GrpcCore\Proto.Remote.GrpcCore.csproj" />
   </ItemGroup>
 </Project>

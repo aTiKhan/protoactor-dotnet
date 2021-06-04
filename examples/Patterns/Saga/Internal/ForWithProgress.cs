@@ -1,13 +1,19 @@
-﻿using System;
+﻿// -----------------------------------------------------------------------
+// <copyright file="ForWithProgress.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
+// -----------------------------------------------------------------------
+using System;
 
 namespace Saga.Internal
 {
     public class ForWithProgress
     {
-        private bool _runBothOnEvery;
-        private bool _runOnStart;
-        private int _total;
-        private int _everyNth;
+        private readonly int _everyNth;
+        private readonly bool _runBothOnEvery;
+        private readonly bool _runOnStart;
+        private readonly int _total;
+
         public ForWithProgress(int total, int everyNth, bool runBothOnEvery, bool runOnStart)
         {
             _runBothOnEvery = runBothOnEvery;
@@ -18,19 +24,21 @@ namespace Saga.Internal
 
         public void EveryNth(Action<int> everyNthAction, Action<int, bool> everyAction)
         {
-            bool mustRunNth(int current)
+            for (var i = 1; i < _total + 1; i++)
             {
-                if (current == 0 && _runOnStart) return true;
-                if (current == 0) return false;
-                return (current % _everyNth == 0);
-            }
-            for (int i = 1; i < _total + 1; i++)
-            {
-                bool must = mustRunNth(i);
+                var must = MustRunNth(i);
                 if (must) everyNthAction(i);
                 if (must && !_runBothOnEvery) continue;
+
                 everyAction(i, must);
             }
+            
+            bool MustRunNth(int current) => current switch
+            {
+                0 when _runOnStart => true,
+                0                  => false,
+                _                  => current % _everyNth == 0
+            };
         }
     }
 }

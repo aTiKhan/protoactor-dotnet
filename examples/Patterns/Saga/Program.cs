@@ -1,17 +1,16 @@
-﻿using System;
-using System.Linq;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Win32.SafeHandles;
+﻿// -----------------------------------------------------------------------
+// <copyright file="Program.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
+// -----------------------------------------------------------------------
+using System;
 using Proto;
 
 namespace Saga
 {
-    internal class Program
+    class Program
     {
-        private static RootContext Context = RootContext.Empty;
+        private static readonly RootContext Context = new ActorSystem().Root;
 
         public static void Main(string[] args)
         {
@@ -23,14 +22,19 @@ namespace Saga
             var retryAttempts = 0;
             var refusalProbability = 0.01;
             var busyProbability = 0.01;
-            bool verbose = false;
+            var verbose = false;
 
-            var props = Props.FromProducer(() => new Runner(numberOfTransfers, intervalBetweenConsoleUpdates, uptime, refusalProbability, busyProbability, retryAttempts, verbose))
-                .WithChildSupervisorStrategy(new OneForOneStrategy((pid, reason) => SupervisorDirective.Restart, retryAttempts, null));
-            
+            var props = Props.FromProducer(() =>
+                    new Runner(numberOfTransfers, intervalBetweenConsoleUpdates, uptime, refusalProbability, busyProbability, retryAttempts, verbose)
+                )
+                .WithChildSupervisorStrategy(new OneForOneStrategy((_, _) => SupervisorDirective.Restart,
+                        retryAttempts, null
+                    )
+                );
+
             Console.WriteLine("Spawning runner");
             var runner = Context.SpawnNamed(props, "runner");
-           
+
             Console.ReadLine();
         }
     }

@@ -1,19 +1,16 @@
 // -----------------------------------------------------------------------
-//   <copyright file="PID.cs" company="Asynkron HB">
-//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
-//   </copyright>
+// <copyright file="PID.cs" company="Asynkron AB">
+//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+// </copyright>
 // -----------------------------------------------------------------------
-
-using System;
-using System.Threading;
-using System.Threading.Tasks;
+using Google.Protobuf;
 
 namespace Proto
 {
     // ReSharper disable once InconsistentNaming
-    public partial class PID
+    public partial class PID : ICustomDiagnosticMessage
     {
-        private Process _process;
+        private Process? _process;
 
         public PID(string address, string id)
         {
@@ -21,82 +18,51 @@ namespace Proto
             Id = id;
         }
 
-        internal PID(string address, string id, Process process) : this(address, id)
-        {
-            _process = process;
-        }
+        internal PID(string address, string id, Process process) : this(address, id) => _process = process;
 
-        internal Process Ref
+        public string ToDiagnosticString() => $"{Address}/{Id}";
+
+        public static PID FromAddress(string address, string id) => new(address, id);
+
+        internal Process? Ref(ActorSystem system)
         {
-            get
+            if (_process is not null)
             {
-                var p = _process;
-                if (p != null)
-                {
-                    if (p is ActorProcess lp && lp.IsDead)
-                    {
-                        _process = null;
-                    }
-                    return _process;
-                }
-
-                var reff = ProcessRegistry.Instance.Get(this);
-                if (!(reff is DeadLetterProcess))
-                {
-                    _process = reff;
-                }
+                if (_process is ActorProcess actorProcess && actorProcess.IsDead) _process = null;
 
                 return _process;
             }
+
+            var reff = system.ProcessRegistry.Get(this);
+            if (reff is not DeadLetterProcess) _process = reff;
+
+            return _process;
         }
 
-        internal void SendUserMessage(object message)
+        internal void SendUserMessage(ActorSystem system, object message)
         {
-            var reff = Ref ?? ProcessRegistry.Instance.Get(this);
+            var reff = Ref(system) ?? system.ProcessRegistry.Get(this);
             reff.SendUserMessage(this, message);
         }
 
-        public void SendSystemMessage(object sys)
+        public void SendSystemMessage(ActorSystem system, object sys)
         {
-            var reff = Ref ?? ProcessRegistry.Instance.Get(this);
+            var reff = Ref(system) ?? system.ProcessRegistry.Get(this);
             reff.SendSystemMessage(this, sys);
         }
 
-        [Obsolete("Replaced with Context.Stop(pid)", false)]
-        public void Stop()
+        public void Stop(ActorSystem system)
         {
-            var reff = ProcessRegistry.Instance.Get(this);
+            var reff = _process ?? system.ProcessRegistry.Get(this);
             reff.Stop(this);
         }
 
-        [Obsolete("Replaced with Context.StopAsync(pid)", false)]
-        public Task StopAsync()
+        public PID WithRequestId(uint requestId) => new()
         {
-            var future = new FutureProcess<object>();
-
-            SendSystemMessage(new Watch(future.Pid));
-            Stop();
-
-            return future.Task;
-        }
-
-        [Obsolete("Replaced with Context.Poison(pid)", false)]
-        public void Poison() => SendUserMessage(new PoisonPill());
-
-        [Obsolete("Replaced with Context.PoisonAsync(pid)", false)]
-        public Task PoisonAsync()
-        {
-            var future = new FutureProcess<object>();
-
-            SendSystemMessage(new Watch(future.Pid));
-            Poison();            
-
-            return future.Task;
-        }
-
-        public string ToShortString()
-        {
-            return Address + "/" + Id;
-        }
+            Id = Id,
+            Address = Address,
+            _process = _process,
+            RequestId = requestId
+        };
     }
 }

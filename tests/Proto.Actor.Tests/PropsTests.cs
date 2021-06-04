@@ -1,5 +1,6 @@
-﻿using Proto.Mailbox;
-using System;
+﻿using System;
+using System.Threading.Tasks;
+using Proto.Mailbox;
 using Proto.TestFixtures;
 using Xunit;
 
@@ -7,6 +8,15 @@ namespace Proto.Tests
 {
     public class PropsTests
     {
+        [Fact]
+        public void Can_pass_ActorSystem_via_Props()
+        {
+            var system = new ActorSystem();
+            var props = Props.FromProducer(s => new ActorWithSystem(s));
+            var actor = (ActorWithSystem) props.Producer(system);
+            Assert.Same(system, actor.System);
+        }
+
         [Fact]
         public void Given_Props_When_WithDispatcher_Then_mutate_Dispatcher()
         {
@@ -30,13 +40,13 @@ namespace Proto.Tests
         [Fact]
         public void Given_Props_When_WithMailbox_Then_mutate_MailboxProducer()
         {
-            Func<IMailbox> mailboxProducer = () => new TestMailbox();
+            IMailbox MailboxProducer() => new TestMailbox();
 
             var props = new Props();
-            var props2 = props.WithMailbox(mailboxProducer);
+            var props2 = props.WithMailbox(MailboxProducer);
 
             Assert.NotEqual(props, props2);
-            Assert.Equal(mailboxProducer, props2.MailboxProducer);
+            Assert.Equal(MailboxProducer, props2.MailboxProducer);
 
             Assert.Equal(props.Dispatcher, props2.Dispatcher);
             Assert.NotEqual(props.MailboxProducer, props2.MailboxProducer);
@@ -74,13 +84,13 @@ namespace Proto.Tests
         [Fact]
         public void Given_Props_When_WithProducer_Then_mutate_Producer()
         {
-            Func<IActor> producer = () => (IActor)null;
+            static IActor Producer(ActorSystem s) => null!;
 
             var props = new Props();
-            var props2 = props.WithProducer(producer);
+            var props2 = props.WithProducer(Producer);
 
             Assert.NotEqual(props, props2);
-            Assert.Equal(producer, props2.Producer);
+            Assert.Equal(Producer, props2.Producer);
 
             Assert.Equal(props.Dispatcher, props2.Dispatcher);
             Assert.Equal(props.MailboxProducer, props2.MailboxProducer);
@@ -94,13 +104,13 @@ namespace Proto.Tests
         [Fact]
         public void Given_Props_When_WithSpawner_Then_mutate_Spawner()
         {
-            Spawner spawner = (id, p, parent) => new PID();
+            PID Spawner(ActorSystem s, string id, Props p, PID? parent) => new();
 
             var props = new Props();
-            var props2 = props.WithSpawner(spawner);
+            var props2 = props.WithSpawner(Spawner);
 
             Assert.NotEqual(props, props2);
-            Assert.Equal(spawner, props2.Spawner);
+            Assert.Equal(Spawner, props2.Spawner);
 
             Assert.Equal(props.Dispatcher, props2.Dispatcher);
             Assert.Equal(props.MailboxProducer, props2.MailboxProducer);
@@ -129,6 +139,15 @@ namespace Proto.Tests
             Assert.Equal(props.Producer, props2.Producer);
             Assert.Equal(props.Spawner, props2.Spawner);
             Assert.NotEqual(props.SupervisorStrategy, props2.SupervisorStrategy);
+        }
+
+        public class ActorWithSystem : IActor
+        {
+            public ActorWithSystem(ActorSystem system) => System = system;
+
+            public ActorSystem System { get; }
+
+            public Task ReceiveAsync(IContext context) => throw new NotImplementedException();
         }
     }
 }
