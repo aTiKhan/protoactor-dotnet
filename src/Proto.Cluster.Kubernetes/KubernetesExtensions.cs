@@ -1,16 +1,17 @@
 // -----------------------------------------------------------------------
 // <copyright file="KubernetesExtensions.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
+using Json.Patch;
 using k8s;
 using k8s.Models;
-using Microsoft.AspNetCore.JsonPatch;
 using static Proto.Cluster.Kubernetes.ProtoLabels;
 
 // ReSharper disable InvertIf
@@ -22,31 +23,26 @@ namespace Proto.Cluster.Kubernetes
         private static string cachedNamespace;
 
         /// <summary>
-        ///     Find the container port for a given pod than matches the given port.
-        /// </summary>
-        /// <param name="pod">Kubernetes Pod object</param>
-        /// <param name="port">Port to find in container ports</param>
-        /// <returns></returns>
-        internal static V1ContainerPort FindPort(this V1Pod pod, int port)
-            => pod.Spec.Containers[0].Ports.FirstOrDefault(x => x.ContainerPort == port);
-
-        /// <summary>
         ///     Replace pod labels
         /// </summary>
         /// <param name="kubernetes">Kubernetes client</param>
         /// <param name="podName">Name of the pod</param>
         /// <param name="podNamespace">Namespace of the pod</param>
+        /// <param name="pod">the pod that should be patched</param>
         /// <param name="labels">Labels collection. All labels will be replaced by the new labels.</param>
         /// <returns></returns>
         internal static Task<V1Pod> ReplacePodLabels(
             this IKubernetes kubernetes,
             string podName,
             string podNamespace,
+            V1Pod pod,
             IDictionary<string, string> labels
         )
         {
-            var patch = new JsonPatchDocument<V1Pod>();
-            patch.Replace(x => x.Metadata.Labels, labels);
+            var old = JsonSerializer.SerializeToDocument(pod);
+            pod.Metadata.Labels = labels;
+            var expected = JsonSerializer.SerializeToDocument(pod);
+            var patch = old.CreatePatch(expected);
             return kubernetes.PatchNamespacedPodAsync(new V1Patch(patch, V1Patch.PatchType.JsonPatch), podName, podNamespace);
         }
 

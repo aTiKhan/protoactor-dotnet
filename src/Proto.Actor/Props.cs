@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="Props.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System;
@@ -15,9 +15,10 @@ namespace Proto
     [PublicAPI]
     public sealed record Props
     {
+        private static IActor NullProducer(ActorSystem _, IContext __) => null!;
         public static readonly Props Empty = new();
 
-        public ProducerWithSystem Producer { get; init; } = _ => null!;
+        public ProducerWithSystemAndContext Producer { get; init; } = NullProducer;
         public MailboxProducer MailboxProducer { get; init; } = () => UnboundedMailbox.Create();
         public ISupervisorStrategy? GuardianStrategy { get; init; }
         public ISupervisorStrategy SupervisorStrategy { get; init; } = Supervision.DefaultStrategy;
@@ -45,17 +46,25 @@ namespace Proto
 
         public static PID DefaultSpawner(ActorSystem system, string name, Props props, PID? parent)
         {
+            //Ordering is important here
+            //first we create a mailbox and attach it to a process
+            props = system.ConfigureProps(props);
             var mailbox = props.MailboxProducer();
             var dispatcher = props.Dispatcher;
             var process = new ActorProcess(system, mailbox);
+            
+            //then we register it to the process registry
             var (self, absent) = system.ProcessRegistry.TryAdd(name, process);
-
+            //if this fails we exit and the process and mailbox is Garbage Collected
             if (!absent) throw new ProcessNameExistException(name, self);
-
+            
+            //if successful, we create the actor and attach it to the mailbox
             var ctx = ActorContext.Setup(system, props, parent, self, mailbox);
             Initialize(props, ctx);
             mailbox.RegisterHandlers(ctx, dispatcher);
             mailbox.PostSystemMessage(Started.Instance);
+            
+            //finally, start the mailbox and make the actor consume messages
             mailbox.Start();
 
             return self;
@@ -70,9 +79,12 @@ namespace Proto
         }
 
         public Props WithProducer(Producer producer) =>
-            this with {Producer = _ => producer()};
+            this with {Producer = (_,_) => producer()};
 
         public Props WithProducer(ProducerWithSystem producer) =>
+            this with {Producer = (system, _) => producer(system)};
+        
+        public Props WithProducer(ProducerWithSystemAndContext producer) =>
             this with {Producer = producer};
 
         public Props WithDispatcher(IDispatcher dispatcher) =>
@@ -135,7 +147,7 @@ namespace Proto
 
         internal PID Spawn(ActorSystem system, string name, PID? parent) => Spawner(system, name, this, parent);
 
-        public static Props FromProducer(Producer producer) => Empty.WithProducer(s => producer());
+        public static Props FromProducer(Producer producer) => Empty.WithProducer(_ => producer());
 
         public static Props FromProducer(ProducerWithSystem producer) => Empty.WithProducer(producer);
 

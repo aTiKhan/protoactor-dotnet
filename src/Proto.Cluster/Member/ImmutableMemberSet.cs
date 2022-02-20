@@ -1,6 +1,6 @@
 // -----------------------------------------------------------------------
 // <copyright file="ImmutableMemberSet.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2021 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System;
@@ -43,6 +43,13 @@ namespace Proto.Cluster
         public ImmutableMemberSet Except(ImmutableMemberSet other)
         {
             var both = Members.Except(other.Members);
+            return new ImmutableMemberSet(both);
+        }
+        
+        public ImmutableMemberSet Except(IEnumerable<string> other)
+        {
+            var otherSet = other.ToImmutableHashSet();
+            var both = Members.Where(m => !otherSet.Contains(m.Id));
             return new ImmutableMemberSet(both);
         }
         

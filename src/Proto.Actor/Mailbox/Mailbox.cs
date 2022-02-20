@@ -1,9 +1,10 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="Mailbox.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -48,9 +49,8 @@ namespace Proto.Mailbox
         private IDispatcher _dispatcher;
         private IMessageInvoker _invoker;
 
-        private int _status = MailboxStatus.Idle;
+        private long _status = MailboxStatus.Idle;
         private bool _suspended;
-        private volatile bool _hasSystemMessages;
 
         public DefaultMailbox(
             IMailboxQueue systemMessages,
@@ -79,7 +79,7 @@ namespace Proto.Mailbox
             _invoker = NoopInvoker.Instance;
         }
 
-        public int Status => _status;
+        public int Status => (int)Interlocked.Read(ref _status);
 
         public int UserMessageCount => _userMailbox.Length;
 
@@ -125,8 +125,7 @@ namespace Proto.Mailbox
         public void PostSystemMessage(object msg)
         {
             _systemMessages.Push(msg);
-            _hasSystemMessages = true;
-            
+
             if (msg is Stop)
                 _invoker?.CancellationTokenSource?.Cancel();
 
@@ -152,22 +151,24 @@ namespace Proto.Mailbox
             }
         }
 
-        private Task RunAsync()
+        private static Task RunAsync(DefaultMailbox mailbox)
         {
-            var task = ProcessMessages();
+            var task = mailbox.ProcessMessages();
 
             if (!task.IsCompletedSuccessfully)
             {
-                return Await(this, task);
+                return Await(mailbox, task);
             }
 
-            Interlocked.Exchange(ref _status, MailboxStatus.Idle);
+            Interlocked.Exchange(ref mailbox._status, MailboxStatus.Idle);
 
-            if (_systemMessages.HasMessages || !_suspended && _userMailbox.HasMessages)
-                Schedule();
+            if (mailbox._systemMessages.HasMessages || !mailbox._suspended && mailbox._userMailbox.HasMessages)
+            {
+                mailbox.Schedule();
+            }
             else
             {
-                foreach (var t in _stats)
+                foreach (var t in mailbox._stats)
                 {
                     t.MailboxEmpty();
                 }
@@ -182,7 +183,9 @@ namespace Proto.Mailbox
                 Interlocked.Exchange(ref self._status, MailboxStatus.Idle);
 
                 if (self._systemMessages.HasMessages || !self._suspended && self._userMailbox.HasMessages)
+                {
                     self.Schedule();
+                }
                 else
                 {
                     foreach (var t in self._stats)
@@ -201,35 +204,30 @@ namespace Proto.Mailbox
             {
                 for (var i = 0; i < _dispatcher.Throughput; i++)
                 {
-                    if (_hasSystemMessages)
+                    msg = _systemMessages.Pop();
+
+                    if (msg is not null)
                     {
-                        msg = _systemMessages.Pop();
-
-                        if (msg is not null)
+                        _suspended = msg switch
                         {
-                            _suspended = msg switch
-                            {
-                                SuspendMailbox => true,
-                                ResumeMailbox  => false,
-                                _              => _suspended
-                            };
+                            SuspendMailbox => true,
+                            ResumeMailbox  => false,
+                            _              => _suspended
+                        };
 
-                            var t = _invoker.InvokeSystemMessageAsync(msg);
-                            if (!t.IsCompletedSuccessfully)
-                            {
-                                return Await(msg, t, this);
-                            }
+                        var t = _invoker.InvokeSystemMessageAsync(msg);
 
-                            foreach (var t1 in _stats)
-                            {
-                                t1.MessageReceived(msg);
-                            }
-
-                            continue;
+                        if (!t.IsCompletedSuccessfully)
+                        {
+                            return Await(msg, t, this);
                         }
 
-                        //race here, but that's ok, we process it next round in the loop
-                        _hasSystemMessages = false;
+                        foreach (var t1 in _stats)
+                        {
+                            t1.MessageReceived(msg);
+                        }
+
+                        continue;
                     }
 
                     if (_suspended) break;
@@ -280,7 +278,20 @@ namespace Proto.Mailbox
         private void Schedule()
         {
             if (Interlocked.CompareExchange(ref _status, MailboxStatus.Busy, MailboxStatus.Idle) == MailboxStatus.Idle)
-                _dispatcher.Schedule(RunAsync);
+            {
+#if NET5_0_OR_GREATER
+                ThreadPool.UnsafeQueueUserWorkItem(RunWrapper, this ,false);
+#else
+                ThreadPool.UnsafeQueueUserWorkItem(RunWrapper, this);
+#endif
+            }
+        }
+        
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void RunWrapper(object state)
+        {
+            var y = (DefaultMailbox) state;
+            RunAsync(y);
         }
     }
 

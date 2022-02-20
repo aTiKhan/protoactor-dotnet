@@ -1,6 +1,6 @@
 // -----------------------------------------------------------------------
 // <copyright file="OneForOneStrategy.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System;
@@ -64,9 +64,15 @@ namespace Proto
                     throw new ArgumentOutOfRangeException();
             }
 
-            void LogInfo(string action) => Logger.LogInformation("{Action} {Actor} because of {Reason}", action,
-                child, reason
-            );
+            void LogInfo(string action)
+            {
+                if (Logger.IsEnabled(LogLevel.Information))
+                {
+                    Logger.LogInformation("{Action} {Actor} because of {Reason}", action,
+                        child, reason
+                    );
+                }
+            }
         }
 
         private bool ShouldStop(RestartStatistics rs)

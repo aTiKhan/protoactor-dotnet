@@ -1,13 +1,12 @@
 ﻿// -----------------------------------------------------------------------
 //   <copyright file="Activator.cs" company="Asynkron AB">
-//       Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//       Copyright (C) 2015-2022 Asynkron AB All rights reserved
 //   </copyright>
 // -----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -21,61 +20,76 @@ namespace Proto.Cluster.Identity
         private readonly Cluster _cluster;
 
         private readonly IdentityStorageLookup _identityLookup;
-        private readonly ILogger _logger;
+        private static readonly ILogger Logger = Log.CreateLogger<IdentityStoragePlacementActor>();
 
         //pid -> the actor that we have created here
         //kind -> the actor kind
         //eventId -> the cluster wide eventId when this actor was created
         private readonly Dictionary<ClusterIdentity, PID> _myActors = new();
-        
+        private EventStreamSubscription<object>? _subscription;
 
         public IdentityStoragePlacementActor(Cluster cluster, IdentityStorageLookup identityLookup)
         {
             _cluster = cluster;
             _identityLookup = identityLookup;
-            _logger = Log.CreateLogger($"{nameof(IdentityStoragePlacementActor)}-{cluster.LoggerId}");
         }
 
         public Task ReceiveAsync(IContext context) => context.Message switch
         {
-            Stopping _            => Stopping(context),
-            Stopped _             => Stopped(context),
-            Terminated msg        => Terminated(context, msg),
-            ActivationRequest msg => ActivationRequest(context, msg),
-            _                     => Task.CompletedTask
+            Started                   => OnStarted(context),
+            Stopping _                => Stopping(),
+            Stopped _                 => Stopped(),
+            ActivationTerminating msg => Terminated(context, msg),
+            ActivationRequest msg     => ActivationRequest(context, msg),
+            _                         => Task.CompletedTask
         };
 
-        private Task Stopping(IContext context)
+        private Task OnStarted(IContext context)
         {
-            _logger.LogInformation("Stopping placement actor");
+            _subscription = context.System.EventStream.Subscribe<ActivationTerminating>(e => context.Send(context.Self, e));
             return Task.CompletedTask;
         }
 
-        private Task Stopped(IContext context)
+        private Task Stopping()
         {
-            _logger.LogInformation("Stopped placement actor");
+            Logger.LogInformation("Stopping placement actor");
+            _subscription?.Unsubscribe();
             return Task.CompletedTask;
         }
 
-        private async Task Terminated(IContext context, Terminated msg)
+        private Task Stopped()
+        {
+            Logger.LogInformation("Stopped placement actor");
+            return Task.CompletedTask;
+        }
+
+        private async Task Terminated(IContext context, ActivationTerminating msg)
         {
             if (context.System.Shutdown.IsCancellationRequested) return;
-
-            var (identity, pid) = _myActors.FirstOrDefault(kvp => kvp.Value.Equals(msg.Who));
-
-            if (identity != null && pid != null)
+            
+            if (!_myActors.TryGetValue(msg.ClusterIdentity, out var pid))
             {
-                _myActors.Remove(identity);
-                _cluster.PidCache.RemoveByVal(identity, pid);
+                Logger.LogWarning("Activation not found: {ActivationTerminating}", msg);
+                return;
+            }
 
-                try
-                {
-                    await _identityLookup.RemovePidAsync(identity, msg.Who, CancellationToken.None);
-                }
-                catch (Exception e)
-                {
-                    _logger.LogError(e, "Failed to remove {Activation} from storage", pid);
-                }
+            if (!pid.Equals(msg.Pid))
+            {
+                Logger.LogWarning("Activation did not match pid: {ActivationTerminating}, {Pid}", msg, pid);
+                return;
+            }
+
+
+            _myActors.Remove(msg.ClusterIdentity);
+            _cluster.PidCache.RemoveByVal(msg.ClusterIdentity, pid);
+
+            try
+            {
+                await _identityLookup.RemovePidAsync(msg.ClusterIdentity, pid, CancellationToken.None);
+            }
+            catch (Exception e)
+            {
+                Logger.LogError(e, "Failed to remove {Activation} from storage", pid);
             }
         }
 
@@ -100,9 +114,15 @@ namespace Proto.Cluster.Identity
 
                     var sw = Stopwatch.StartNew();
                     var pid = context.SpawnPrefix(clusterProps, msg.ClusterIdentity.ToString());
-                    context.System.Metrics.Get<ClusterMetrics>().ClusterActorSpawnHistogram
-                        .Observe(sw, new[] {_cluster.System.Id, _cluster.System.Address, msg.Kind});
                     sw.Stop();
+
+                    if (_cluster.System.Metrics.Enabled)
+                    {
+                        ClusterMetrics.ClusterActorSpawnDuration
+                            .Record(sw.Elapsed.TotalSeconds,
+                                new("id", _cluster.System.Id), new("address", _cluster.System.Address), new("clusterkind", msg.Kind)
+                            );
+                    }
 
                     //Do not expose the PID externally before we have persisted the activation
                     var completionCallback = new TaskCompletionSource<PID?>();
@@ -131,7 +151,7 @@ namespace Proto.Cluster.Identity
             }
             catch (Exception e)
             {
-                _logger.LogError(e, "Failed to spawn {Kind}/{Identity}", msg.Kind, msg.Identity);
+                Logger.LogError(e, "Failed to spawn {Kind}/{Identity}", msg.Kind, msg.Identity);
                 Respond(null);
             }
 
@@ -163,19 +183,19 @@ namespace Proto.Cluster.Identity
                 }
                 catch (LockNotFoundException)
                 {
-                    _logger.LogError("We no longer own the lock {@SpawnLock}", spawnLock);
+                    Logger.LogWarning("We no longer own the lock {@SpawnLock}", spawnLock);
                     return false;
                 }
                 catch (Exception e)
                 {
                     if (++attempts < PersistenceRetries)
                     {
-                        _logger.LogWarning(e, "No entry was updated {@SpawnLock}. Retrying.", spawnLock);
+                        Logger.LogWarning(e, "No entry was updated {@SpawnLock}. Retrying", spawnLock);
                         await Task.Delay(50);
                     }
                     else
                     {
-                        _logger.LogError(e, "Failed to persist activation: {@SpawnLock}", spawnLock);
+                        Logger.LogError(e, "Failed to persist activation: {@SpawnLock}", spawnLock);
                         return false;
                     }
                 }

@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="MessageEnvelope.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Generic;
@@ -26,6 +26,9 @@ namespace Proto
         public static MessageEnvelope Wrap(object message) =>
             message is MessageEnvelope env ? env : new MessageEnvelope(message, null);
 
+        public static MessageEnvelope Wrap(object message, MessageHeader header) =>
+            message is MessageEnvelope env ? env.MergeHeader(header) : new MessageEnvelope(message, null, header);
+
         public MessageEnvelope WithSender(PID sender) =>
             this with {Sender = sender};
 
@@ -34,6 +37,16 @@ namespace Proto
 
         public MessageEnvelope WithHeader(MessageHeader header) =>
             this with {Header = header};
+
+        public MessageEnvelope MergeHeader(MessageHeader header)
+        {
+            if (header.Count == 0)
+            {
+                return this;
+            }
+
+            return this with {Header = Header.With(header)};
+        }
 
         public MessageEnvelope WithHeader(string key, string value)
         {

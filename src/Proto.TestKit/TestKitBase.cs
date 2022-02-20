@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="TestKitBase.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System;
@@ -167,5 +167,8 @@ namespace Proto.TestKit
         /// <returns></returns>
         public PID SpawnPrefix<T>(string prefix) where T : IActor, new() =>
             Context.SpawnPrefix(Props.FromProducer(() => new T()), prefix);
+
+        /// <inheritdoc />
+        public ActorSystem System => Context.System;
     }
 }

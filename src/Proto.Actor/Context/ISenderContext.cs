@@ -1,6 +1,6 @@
 // -----------------------------------------------------------------------
 // <copyright file="ISenderContext.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System;
@@ -74,6 +74,7 @@ namespace Proto
         /// <summary>
         ///     Sends a message together with a Sender PID, this allows the target to respond async to the Sender
         /// </summary>
+        /// <param name="self">the context used to issue the request</param>
         /// <param name="target">The target PID</param>
         /// <param name="message">The message to send</param>
         public static void Request(this ISenderContext self, PID target, object message) =>
@@ -83,42 +84,107 @@ namespace Proto
         ///     Sends a message together with a Sender PID, this allows the target to respond async to the Sender.
         ///     This operation can be awaited.
         /// </summary>
+        /// <param name="self">the context used to issue the request</param>
         /// <param name="target">The target PID</param>
         /// <param name="message">The message to send</param>
         /// <typeparam name="T">Expected return message type</typeparam>
         /// <returns>A Task that completes once the Target Responds back to the Sender</returns>
         public static Task<T> RequestAsync<T>(this ISenderContext self, PID target, object message) =>
-            self.RequestAsync<T>(target, message, CancellationToken.None);
+            self.RequestAsync<T>(target, message, self.System.Config.RequestAsyncTimeout);
 
         /// <summary>
         ///     Sends a message together with a Sender PID, this allows the target to respond async to the Sender.
         ///     This operation can be awaited.
         /// </summary>
+        /// <param name="self">the context used to issue the request</param>
         /// <param name="target">The target PID</param>
         /// <param name="message">The message to send</param>
         /// <param name="timeout">Timeout for the request</param>
         /// <typeparam name="T">Expected return message type</typeparam>
         /// <returns>A Task that completes once the Target Responds back to the Sender</returns>
-        public static Task<T> RequestAsync<T>(this ISenderContext self, PID target, object message, TimeSpan timeout)
-            => self.RequestAsync<T>(target, message, CancellationTokens.WithTimeout(timeout));
+        public static async Task<T> RequestAsync<T>(this ISenderContext self, PID target, object message, TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            var res = await self.RequestAsync<T>(target, message, cts.Token);
+            return res;
+        }
 
-        internal static async Task<T> RequestAsync<T>(this ISenderContext self,  PID target, object message, CancellationToken cancellationToken)
+        /// <summary>
+        ///     Sends a message together with a Sender PID, this allows the target to respond async to the Sender.
+        ///     Once the request completes, the callback is scheduled to run in the actors concurrency constraint.
+        /// </summary>
+        /// <param name="self">the context used to issue the request</param>
+        /// <param name="target">The target PID</param>
+        /// <param name="message">The message to send</param>
+        /// <param name="callback"></param>
+        /// <param name="ct"></param>
+        /// <typeparam name="T">Expected return message type</typeparam>
+        public static void RequestReenter<T>(this IContext self, PID target, object message, Func<Task<T>, Task> callback, CancellationToken ct)
+        {
+            var task = self.RequestAsync<T>(target, message, ct);
+            self.ReenterAfter(task, callback);
+        }
+
+        /// <summary>
+        ///     Sends a message together with a Sender PID, this allows the target to respond async to the Sender.
+        ///     This operation can be awaited.
+        /// </summary>
+        /// <param name="self">Calling context</param>
+        /// <param name="target">The target PID</param>
+        /// <param name="message">The message to send</param>
+        /// <param name="headers">Optional headers</param>
+        /// <param name="cancellationToken">Optional CancellationToken</param>
+        /// <typeparam name="T">Expected return message type</typeparam>
+        /// <returns>A Task that completes once the Target Responds back to the Sender</returns>
+        public static async Task<(T message, MessageHeader header)> RequestWithHeadersAsync<T>(
+            this ISenderContext self,
+            PID target,
+            object message,
+            MessageHeader? headers = null,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var request = headers is null ? message : MessageEnvelope.Wrap(message, headers);
+            var result = await self.RequestAsync<MessageEnvelope>(target, request, cancellationToken);
+
+            var messageResult = MessageEnvelope.UnwrapMessage(result);
+
+            switch (messageResult)
+            {
+                case null:
+                case T:
+                    return ((T) messageResult!, MessageEnvelope.UnwrapHeader(result));
+                default:
+                    throw new InvalidOperationException(
+                        $"Unexpected message. Was type {messageResult.GetType()} but expected {typeof(T)}"
+                    );
+            }
+        }
+
+        internal static async Task<T> RequestAsync<T>(this ISenderContext self, PID target, object message, CancellationToken cancellationToken)
         {
             using var future = self.GetFuture();
-            var messageEnvelope = new MessageEnvelope(message, future.Pid);
+            var messageEnvelope = message is MessageEnvelope envelope ? envelope.WithSender(future.Pid) : new MessageEnvelope(message, future.Pid);
             self.Send(target, messageEnvelope);
             var result = await future.GetTask(cancellationToken);
 
-            switch (result)
+            var messageResult = MessageEnvelope.UnwrapMessage(result);
+
+            switch (messageResult)
             {
                 case DeadLetterResponse:
                     throw new DeadLetterException(target);
                 case null:
                 case T:
-                    return (T) result!;
+                    return (T) messageResult!;
                 default:
+                    if (typeof(T) == typeof(MessageEnvelope))
+                    {
+                        return (T) (object) MessageEnvelope.Wrap(result);
+                    }
+
                     throw new InvalidOperationException(
-                        $"Unexpected message. Was type {result.GetType()} but expected {typeof(T)}"
+                        $"Unexpected message. Was type {messageResult.GetType()} but expected {typeof(T)}"
                     );
             }
         }

@@ -12,16 +12,18 @@ namespace Proto.OpenTracing
     /// <summary>
     ///     Good documentation/tutorials here : https://github.com/yurishkuro/opentracing-tutorial/tree/master/csharp
     /// </summary>
+    [Obsolete(ObsoleteInformation.Text)]
     public static class OpenTracingExtensions
     {
         /// <summary>
         ///     Setup open tracing send middleware & decorator.
         /// </summary>
         /// <param name="props">props.</param>
-        /// <param name="sendSpanSetup">provide a way inject send span constumisation according to the message.</param>
-        /// <param name="receiveSpanSetup">provide a way inject receive span constumisation according to the message.</param>
+        /// <param name="sendSpanSetup">provide a way inject send span customization according to the message.</param>
+        /// <param name="receiveSpanSetup">provide a way inject receive span customization according to the message.</param>
         /// <param name="tracer">OpenTracing, if nul : GlobalTracer.Instance will be used.</param>
         /// <returns>props</returns>
+        [Obsolete(ObsoleteInformation.Text)]
         public static Props WithOpenTracing(
             this Props props,
             SpanSetup sendSpanSetup = null,
@@ -38,6 +40,7 @@ namespace Proto.OpenTracing
         /// <summary>
         ///     Only responsible to tweak the envelop in order to send SpanContext informations.
         /// </summary>
+        [Obsolete(ObsoleteInformation.Text)]
         public static Func<Sender, Sender> OpenTracingSenderMiddleware(ITracer tracer = null)
             => next => async (context, target, envelope) => {
                 tracer ??= GlobalTracer.Instance;
@@ -77,9 +80,10 @@ namespace Proto.OpenTracing
         ///     constructor.
         /// </summary>
         /// <param name="props">props.</param>
-        /// <param name="sendSpanSetup">provide a way inject send span constumisation according to the message.</param>
+        /// <param name="sendSpanSetup">provide a way inject send span customization according to the message.</param>
         /// <param name="tracer">OpenTracing, if nul : GlobalTracer.Instance will be used.</param>
         /// <returns>IRootContext</returns>
+        [Obsolete(ObsoleteInformation.Text)]
         public static IRootContext WithOpenTracing(this IRootContext context, SpanSetup sendSpanSetup = null, ITracer tracer = null)
         {
             sendSpanSetup ??= OpenTracingHelpers.DefaultSetupSpan;

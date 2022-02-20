@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="MessageHeader.cs" company="Asynkron AB">
-//      Copyright (C) 2015-2020 Asynkron AB All rights reserved
+//      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections;
@@ -48,5 +48,17 @@ namespace Proto
 
         public MessageHeader With(IEnumerable<KeyValuePair<string, string>> items) =>
             this with {Inner = Inner.SetItems(items)};
+
+        public MessageHeader With(MessageHeader header)
+        {
+            if (header.Count == 0)
+            {
+                return this;
+            }
+
+            if (Count == 0) return header;
+
+            return this with {Inner = Inner.SetItems(header.Inner)};
+        }
     }
 }
