@@ -3,93 +3,255 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using JetBrains.Annotations;
 using Microsoft.Extensions.Logging;
+using Proto.Context;
+using Proto.Extensions;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 // ReSharper disable once CheckNamespace
-namespace Proto
+namespace Proto;
+
+[PublicAPI]
+public record ActorSystemConfig
 {
-    [PublicAPI]
-    public record ActorSystemConfig
+    /// <summary>
+    ///     The interval used to trigger throttling of deadletter message logs
+    /// </summary>
+    public TimeSpan DeadLetterThrottleInterval { get; init; }
+
+    /// <summary>
+    ///     The counter used to trigger throttling of deadletter message logs
+    ///     DeadLetter throttling triggers when there are DeadLetterThrottleCount deadletters in DeadLetterThrottleInterval
+    ///     time
+    /// </summary>
+    public int DeadLetterThrottleCount { get; init; }
+
+    /// <summary>
+    ///     Enables logging for DeadLetter events in Request/RequestAsync (when a message reaches DeadLetter instead of target
+    ///     actor)
+    ///     When disabled, the requesting code is responsible for logging manually
+    /// </summary>
+    public bool DeadLetterRequestLogging { get; set; } = true;
+
+    /// <summary>
+    ///     Developer debugging feature, enables extended logging for actor supervision failures
+    /// </summary>
+    public bool DeveloperSupervisionLogging { get; init; }
+
+    /// <summary>
+    ///     Enables actor metrics. Set to true if you want to export the metrics with OpenTelemetry exporters.
+    /// </summary>
+    public bool MetricsEnabled { get; init; }
+
+    /// <summary>
+    ///     Allows adding middleware to the root context exposed by the ActorSystem.
+    ///     The result from this will be used as the default sender for all requests,
+    ///     except requests overriding the sender context by parameter
+    /// </summary>
+    [JsonIgnore]
+    public Func<RootContext, IRootContext> ConfigureRootContext { get; init; } = context => context;
+
+    /// <summary>
+    ///     Allows ActorSystem-wide augmentation of any Props
+    ///     All props are translated via this function
+    /// </summary>
+    [JsonIgnore]
+    public Func<Props, Props> ConfigureProps { get; init; } = props => props;
+
+    /// <summary>
+    ///     Allows ActorSystem-wide augmentation of system Props
+    ///     All system props are translated via this function
+    ///     By default, DeadlineDecorator, LoggingContextDecorator are used. Additionally, the supervision strategy is set to
+    ///     AlwaysRestart.
+    /// </summary>
+    [JsonIgnore]
+    public Func<string, Props, Props> ConfigureSystemProps { get; init; } = (_, props) =>
     {
-        public TimeSpan DeadLetterThrottleInterval { get; init; }
+        var logger = Log.CreateLogger("Proto.SystemActors");
 
-        public bool MetricsEnabled { get; init; }
-        public int DeadLetterThrottleCount { get; init; }
+        return props
+            .WithDeadlineDecorator(TimeSpan.FromMilliseconds(100), logger)
+            .WithLoggingContextDecorator(logger, LogLevel.None, LogLevel.Debug)
+            .WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy);
+    };
 
-        public bool DeadLetterRequestLogging { get; set; } = true;
-        public bool DeveloperSupervisionLogging { get; init; }
+    /// <summary>
+    ///     Enables SharedFutures
+    ///     SharedFutures allows the ActorSystem to avoid registering a new temporary process for each request
+    ///     Instead registering a SharedFuture that can handle multiple requests internally
+    ///     The default is true.
+    /// </summary>
+    public bool SharedFutures { get; init; } = true;
 
-        public Func<Props, Props> ConfigureProps { get; init; } = props => props; 
+    /// <summary>
+    ///     Sets the number of requests that can be handled by a SharedFuture
+    /// </summary>
+    public int SharedFutureSize { get; init; } = 5000;
 
-        public bool SharedFutures { get; init; }
-        public int SharedFutureSize { get; init; } = 5000;
+    /// <summary>
+    ///     Measures the time it takes from scheduling a Task, until the task starts to execute
+    ///     If this deadline expires, the ActorSystem logs that the threadpool is running hot
+    /// </summary>
+    public TimeSpan ThreadPoolStatsTimeout { get; init; } = TimeSpan.FromSeconds(1);
 
-        public TimeSpan ThreadPoolStatsTimeout { get; init; } = TimeSpan.FromSeconds(1);
-        public bool DeveloperThreadPoolStatsLogging { get; init; }
+    /// <summary>
+    ///     Enables more extensive threadpool stats logging
+    /// </summary>
+    public bool DeveloperThreadPoolStatsLogging { get; init; }
 
-        public static ActorSystemConfig Setup() => new();
+    /// <summary>
+    ///     Function used to serialize actor state to a diagnostics string
+    ///     Can be used together with RemoteDiagnostics to view the state of remote actors
+    /// </summary>
+    [JsonIgnore]
+    public Func<IActor, string> DiagnosticsSerializer { get; set; } = Diagnostics.DiagnosticsSerializer.Serialize;
 
-        public Func<IActor, string> DiagnosticsSerializer { get; set; } = Diagnostics.DiagnosticsSerializer.Serialize;
-        public TimeSpan RequestAsyncTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    /// <summary>
+    ///     The default timeout for RequestAsync calls
+    /// </summary>
+    public TimeSpan ActorRequestTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
-        public ActorSystemConfig WithDeadLetterThrottleInterval(TimeSpan deadLetterThrottleInterval) =>
-            this with {DeadLetterThrottleInterval = deadLetterThrottleInterval};
+    /// <summary>
+    ///     Enables logging for DeadLetter responses in Request/RequestAsync (responses returned from DeadLetter to original
+    ///     sender)
+    /// </summary>
+    public bool DeadLetterResponseLogging { get; init; }
 
-        public ActorSystemConfig WithDeadLetterThrottleCount(int deadLetterThrottleCount) =>
-            this with {DeadLetterThrottleCount = deadLetterThrottleCount};
+    /// <summary>
+    ///     The LogLevel used for diagnostics logging
+    /// </summary>
+    public LogLevel DiagnosticsLogLevel { get; set; } = LogLevel.Information;
 
-        public ActorSystemConfig WithDeadLetterRequestLogging(bool enabled) => this with {DeadLetterRequestLogging = enabled};
+    /// <summary>
+    ///     Creates a new default ActorSystemConfig
+    /// </summary>
+    /// <returns>The new ActorSystemConfig</returns>
+    public static ActorSystemConfig Setup() => new();
 
-        public ActorSystemConfig WithSharedFutures(int size = 5000) => this with {SharedFutures = true, SharedFutureSize = size};
+    /// <summary>
+    ///     The interval used to trigger throttling of deadletter message logs
+    /// </summary>
+    public ActorSystemConfig WithDeadLetterThrottleInterval(TimeSpan deadLetterThrottleInterval) =>
+        this with { DeadLetterThrottleInterval = deadLetterThrottleInterval };
 
-        public ActorSystemConfig WithDeveloperSupervisionLogging(bool enabled) => this with {DeveloperSupervisionLogging = enabled};
+    /// <summary>
+    ///     The counter used to trigger throttling of deadletter message logs
+    ///     DeadLetter throttling triggers when there are DeadLetterThrottleCount deadletters in DeadLetterThrottleInterval
+    ///     time
+    /// </summary>
+    public ActorSystemConfig WithDeadLetterThrottleCount(int deadLetterThrottleCount) =>
+        this with { DeadLetterThrottleCount = deadLetterThrottleCount };
 
-        public ActorSystemConfig WithMetrics(bool enabled = true) => this with {MetricsEnabled = enabled};
+    /// <summary>
+    ///     Enables logging for DeadLetter responses in Request/RequestAsync
+    ///     When disabled, the requesting code is responsible for logging manually
+    /// </summary>
+    public ActorSystemConfig WithDeadLetterRequestLogging(bool enabled) =>
+        this with { DeadLetterRequestLogging = enabled };
 
-        public ActorSystemConfig WithDiagnosticsSerializer(Func<IActor, string> serializer) => this with {DiagnosticsSerializer = serializer};
-        
-        public ActorSystemConfig WithConfigureProps(Func<Props, Props> configureProps) => this with {ConfigureProps = configureProps};
-        
-        public ActorSystemConfig WithThreadPoolStatsTimeout(TimeSpan threadPoolStatsTimeout) => this with {ThreadPoolStatsTimeout = threadPoolStatsTimeout};
-        
-        public ActorSystemConfig WithDeveloperThreadPoolStatsLogging(bool enabled) => this with {DeveloperThreadPoolStatsLogging = enabled};
-        
-    }
+    /// <summary>
+    ///     Enables SharedFutures
+    ///     SharedFutures allows the ActorSystem to avoid registering a new temporary process for each request
+    ///     Instead registering a SharedFuture that can handle multiple requests internally
+    /// </summary>
+    /// <param name="size">The number of requests that can be handled by a SharedFuture</param>
+    public ActorSystemConfig WithSharedFutures(int size = 5000) =>
+        this with { SharedFutures = true, SharedFutureSize = size };
 
-    //Not part of the contract, but still shipped out of the box
-    public static class ActorSystemConfigExtensions
-    {
-        public static ActorSystemConfig WithDeveloperReceiveLogging(this ActorSystemConfig self, TimeSpan receiveDeadline, LogLevel logLevel= LogLevel.Error)
-        {
-            var inner = self.ConfigureProps;
-            var logger = Log.CreateLogger("DeveloperReceive");
-            
-            Receiver DeveloperReceiveLogging(Receiver next) => (context, envelope) => {
-                var sw = Stopwatch.StartNew();
-                var res= next(context, envelope);
-                sw.Stop();
+    /// <summary>
+    ///     Developer debugging feature, enables extended logging for actor supervision failures
+    /// </summary>
+    public ActorSystemConfig WithDeveloperSupervisionLogging(bool enabled) =>
+        this with { DeveloperSupervisionLogging = enabled };
 
-                if (sw.Elapsed > receiveDeadline)
-                {
-                    logger.Log(logLevel,"Receive is taking too long {Elapsed} {Self} incoming message {Message}", sw.Elapsed, context.Self, envelope.Message.GetType().Name);
-                    Console.WriteLine($"Receive is taking too long {sw.Elapsed} {context.Self} incoming message {envelope.Message.GetType().Name}");
-                }
-                
-                return res;
-            };
+    /// <summary>
+    ///     Enables actor metrics. Set to true if you want to export the metrics with OpenTelemetry exporters.
+    /// </summary>
+    public ActorSystemConfig WithMetrics(bool enabled = true) => this with { MetricsEnabled = enabled };
 
-            Props Outer(Props props)
-            {
-                props = inner(props);
-                props = props.WithReceiverMiddleware(DeveloperReceiveLogging);
+    /// <summary>
+    ///     Function used to serialize actor state to a diagnostics string
+    ///     Can be used together with RemoteDiagnostics to view the state of remote actors
+    /// </summary>
+    public ActorSystemConfig WithDiagnosticsSerializer(Func<IActor, string> serializer) =>
+        this with { DiagnosticsSerializer = serializer };
 
-                return props;
-            }
+    /// <summary>
+    ///     Allows adding middleware to the root context exposed by the ActorSystem.
+    ///     The result from this will be used as the default sender for all requests,
+    ///     except requests overriding the sender context by parameter
+    /// </summary>
+    public ActorSystemConfig WithConfigureRootContext(Func<RootContext, IRootContext> configureContext) =>
+        this with { ConfigureRootContext = configureContext };
 
-            return self with {ConfigureProps = Outer};
-        }
-    }
+    /// <summary>
+    ///     Allows ActorSystem-wide augmentation of any Props
+    ///     All props are translated via this function
+    /// </summary>
+    public ActorSystemConfig WithConfigureProps(Func<Props, Props> configureProps) =>
+        this with { ConfigureProps = configureProps };
+
+    /// <summary>
+    ///     Allows ActorSystem-wide augmentation of system Props
+    ///     All system props are translated via this function
+    ///     By default, DeadlineDecorator, LoggingContextDecorator are used. Additionally, the supervision strategy is set to
+    ///     AlwaysRestart.
+    /// </summary>
+    public ActorSystemConfig WithConfigureSystemProps(Func<string, Props, Props> configureSystemProps) =>
+        this with { ConfigureSystemProps = configureSystemProps };
+
+    /// <summary>
+    ///     Measures the time it takes from scheduling a Task, until the task starts to execute
+    ///     If this deadline expires, the ActorSystem logs that the threadpool is running hot
+    /// </summary>
+    public ActorSystemConfig WithThreadPoolStatsTimeout(TimeSpan threadPoolStatsTimeout) =>
+        this with { ThreadPoolStatsTimeout = threadPoolStatsTimeout };
+
+    /// <summary>
+    ///     Enables more extensive threadpool stats logging
+    /// </summary>
+    public ActorSystemConfig WithDeveloperThreadPoolStatsLogging(bool enabled) =>
+        this with { DeveloperThreadPoolStatsLogging = enabled };
+
+    /// <summary>
+    ///     The default timeout for RequestAsync calls
+    /// </summary>
+    public ActorSystemConfig WithActorRequestTimeout(TimeSpan timeout) => this with { ActorRequestTimeout = timeout };
+
+    /// <summary>
+    ///     Enables logging for DeadLetter responses in Request/RequestAsync (responses returned from DeadLetter to original
+    ///     sender)
+    /// </summary>
+    public ActorSystemConfig WithDeadLetterResponseLogging(bool enabled) =>
+        this with { DeadLetterResponseLogging = enabled };
+    
+    /// <summary>
+    ///     The LogLevel used for Diagnostics logging
+    /// </summary>
+    /// <param name="diagnosticsLogLevel">The LogLevel used when logging diagnostics</param>
+    /// <returns></returns>
+    public ActorSystemConfig WithDiagnosticsLogLevel(LogLevel diagnosticsLogLevel) =>
+        this with { DiagnosticsLogLevel = diagnosticsLogLevel };
+
+
+    /// <summary>
+    ///     Wraps a given process inside a wrapper process.
+    ///     This allows for applying middleware on a process level
+    /// </summary>
+    [JsonIgnore]
+    public Func<Process, Process> ConfigureProcess { get; set; } = process => process;
+
+    /// <summary>
+    ///     Wraps a given process inside a wrapper process.
+    ///     This allows for applying middleware on a process level
+    /// </summary>
+    /// <param name="configureProcess">The configure process function</param>
+    public ActorSystemConfig WithConfigureProcess(Func<Process, Process> configureProcess) =>
+        this with { ConfigureProcess = configureProcess };
 }

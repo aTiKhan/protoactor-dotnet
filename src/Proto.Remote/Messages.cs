@@ -4,14 +4,11 @@
 //   </copyright>
 // -----------------------------------------------------------------------
 
-using System;
+namespace Proto.Remote;
 
-namespace Proto.Remote
+public sealed record EndpointTerminatedEvent(bool ShouldBlock, string? Address, string? ActorSystemId)
 {
-    public sealed record EndpointTerminatedEvent(bool OnError, string? Address, string? ActorSystemId)
-    {
-        public override string ToString() => $"EndpointTerminatedEvent: {Address ?? ActorSystemId}";
-    }
-
-    public sealed record RemoteDeliver(Proto.MessageHeader Header, object Message, PID Target, PID? Sender);
+    public override string ToString() => $"EndpointTerminatedEvent: {Address ?? ActorSystemId}";
 }
+
+public sealed record RemoteDeliver(Proto.MessageHeader Header, object Message, PID Target, PID? Sender);

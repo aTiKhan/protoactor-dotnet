@@ -3,6 +3,7 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,41 +11,41 @@ using Google.Protobuf.Reflection;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 
-namespace Proto.Cluster.CodeGen
+namespace Proto.Cluster.CodeGen;
+
+public static class Generator
 {
-    public static class Generator
+    internal static void Generate(FileInfo input, FileInfo output, IEnumerable<DirectoryInfo> importPath,
+        TaskLoggingHelper log, string rootPath, string template)
     {
-        internal static void Generate(FileInfo input, FileInfo output, IEnumerable<DirectoryInfo> importPath, TaskLoggingHelper log, string rootPath, string template)
-        {
-            var set = GetSet(importPath);
-            
-            var inputReader = input.OpenText();
-            var defaultOutputName = output?.FullName ?? Path.GetFileNameWithoutExtension(input.Name);
-            var relativePath = PathPolyfill.GetRelativePath(rootPath, defaultOutputName);
-            
-            set.Add(relativePath, true, inputReader);
-            set.Process();
-            
-            var gen = new CodeGenerator(template);
-            var codeFiles = gen.Generate(set).ToList();
+        var set = GetSet(importPath);
 
-            foreach (var codeFile in codeFiles)
-            {
-                log.LogMessage(MessageImportance.High, $"Saving generated file {codeFile.Name}");
-                File.WriteAllText(codeFile.Name, codeFile.Text);
-            }
+        var inputReader = input.OpenText();
+        var defaultOutputName = output?.FullName ?? Path.GetFileNameWithoutExtension(input.Name);
+        var relativePath = PathPolyfill.GetRelativePath(rootPath, defaultOutputName);
+
+        set.Add(relativePath, true, inputReader);
+        set.Process();
+
+        var gen = new CodeGenerator(template);
+        var codeFiles = gen.Generate(set).ToList();
+
+        foreach (var codeFile in codeFiles)
+        {
+            log.LogMessage(MessageImportance.High, $"Saving generated file {codeFile.Name}");
+            File.WriteAllText(codeFile.Name, codeFile.Text);
+        }
+    }
+
+    private static FileDescriptorSet GetSet(IEnumerable<DirectoryInfo> importPaths)
+    {
+        var set = new FileDescriptorSet();
+
+        foreach (var path in importPaths)
+        {
+            set.AddImportPath(path.FullName);
         }
 
-        private static FileDescriptorSet GetSet(IEnumerable<DirectoryInfo> importPaths)
-        {
-            var set = new FileDescriptorSet();
-
-            foreach (var path in importPaths)
-            {
-                set.AddImportPath(path.FullName);
-            }
-
-            return set;
-        }
+        return set;
     }
 }

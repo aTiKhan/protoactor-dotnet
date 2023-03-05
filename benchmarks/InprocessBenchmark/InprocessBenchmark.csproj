@@ -3,8 +3,8 @@
     <OutputType>Exe</OutputType>
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
-    <TargetFrameworks>net5.0;net6.0;netcoreapp3.1</TargetFrameworks>
-    <LangVersion>9</LangVersion>
+    <TargetFrameworks>net6.0;net7.0</TargetFrameworks>
+    <LangVersion>10</LangVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Proto.Actor\Proto.Actor.csproj" />

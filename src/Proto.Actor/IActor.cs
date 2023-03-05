@@ -3,12 +3,12 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System.Threading.Tasks;
 
-namespace Proto
+namespace Proto;
+
+public interface IActor
 {
-    public interface IActor
-    {
-        Task ReceiveAsync(IContext context);
-    }
+    Task ReceiveAsync(IContext context);
 }

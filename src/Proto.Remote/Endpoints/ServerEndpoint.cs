@@ -7,23 +7,27 @@
 using System;
 using System.Threading.Tasks;
 
-namespace Proto.Remote
+namespace Proto.Remote;
+
+/// <summary>
+///     Handles a connection to a remote endpoint.
+/// </summary>
+public sealed class ServerEndpoint : Endpoint
 {
-    /// <summary>
-    /// Handles a connection to a remote endpoint.
-    /// </summary>
-    public class ServerEndpoint : Endpoint
+    public ServerEndpoint(ActorSystem system, RemoteConfigBase remoteConfig, string remoteAddress,
+        IChannelProvider channelProvider, ServerConnector.Type type, RemoteMessageHandler remoteMessageHandler) : base(
+        remoteAddress, system, remoteConfig)
     {
-        public ServerEndpoint(ActorSystem system, RemoteConfigBase remoteConfig, string address, IChannelProvider channelProvider, ServerConnector.Type type, RemoteMessageHandler remoteMessageHandler) : base(address, system, remoteConfig)
-            => Connector = new ServerConnector(Address, type, this, channelProvider, System, RemoteConfig, remoteMessageHandler);
+        Connector = new ServerConnector(RemoteAddress, type, this, channelProvider, System, RemoteConfig,
+            remoteMessageHandler);
+    }
 
-        public ServerConnector Connector { get; }
+    public ServerConnector Connector { get; }
 
-        public override async ValueTask DisposeAsync()
-        {
-            await base.DisposeAsync().ConfigureAwait(false);
-            await Connector.Stop().ConfigureAwait(false);
-            GC.SuppressFinalize(this);
-        }
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync().ConfigureAwait(false);
+        await Connector.Stop().ConfigureAwait(false);
+        GC.SuppressFinalize(this);
     }
 }

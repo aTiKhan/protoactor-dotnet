@@ -1,22 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <LangVersion>9</LangVersion>
+        <LangVersion>10</LangVersion>
         <Nullable>enable</Nullable>
-        <TargetFrameworks>net5.0;net6.0;netstandard2.1</TargetFrameworks>
+        <TargetFrameworks>netcoreapp3.1;net6.0;net7.0</TargetFrameworks>
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Proto.Cluster\Proto.Cluster.csproj" />
+        <ProjectReference Include="..\Proto.Cluster\Proto.Cluster.csproj" />
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Roslynator.Analyzers" Version="4.0.2">
-        <PrivateAssets>all</PrivateAssets>
-        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      </PackageReference>
-      <PackageReference Include="StackExchange.Redis" Version="2.2.50" />
-      <PackageReference Update="Microsoft.SourceLink.GitHub" Version="1.1.1" />
+        <PackageReference Include="StackExchange.Redis" Version="2.6.66" />
     </ItemGroup>
 
 </Project>

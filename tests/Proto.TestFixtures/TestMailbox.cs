@@ -7,34 +7,36 @@
 using System.Collections.Generic;
 using Proto.Mailbox;
 
-namespace Proto.TestFixtures
+namespace Proto.TestFixtures;
+
+public class TestMailbox : IMailbox
 {
-    public class TestMailbox : IMailbox
+    private IMessageInvoker _invoker;
+    public List<object> UserMessages { get; } = new();
+    public List<object> SystemMessages { get; } = new();
+
+    public int UserMessageCount => UserMessages.Count;
+
+    public void PostUserMessage(object msg)
     {
-        private IMessageInvoker _invoker;
-        public List<object> UserMessages { get; } = new();
-        public List<object> SystemMessages { get; } = new();
+        UserMessages.Add(msg);
+        _invoker?.InvokeUserMessageAsync(msg).GetAwaiter().GetResult();
+    }
 
-        public int UserMessageCount => UserMessages.Count;
-
-        public void PostUserMessage(object msg)
+    public void PostSystemMessage(object msg)
+    {
+        if (msg is Stop)
         {
-            UserMessages.Add(msg);
-            _invoker?.InvokeUserMessageAsync(msg).GetAwaiter().GetResult();
+            _invoker?.CancellationTokenSource?.Cancel();
         }
 
-        public void PostSystemMessage(object msg)
-        {
-            if (msg is Stop)
-                _invoker?.CancellationTokenSource?.Cancel();
-            SystemMessages.Add(msg);
-            _invoker?.InvokeSystemMessageAsync(msg).GetAwaiter().GetResult();
-        }
+        SystemMessages.Add(msg);
+        _invoker?.InvokeSystemMessageAsync((SystemMessage)msg).GetAwaiter().GetResult();
+    }
 
-        public void RegisterHandlers(IMessageInvoker invoker, IDispatcher dispatcher) => _invoker = invoker;
+    public void RegisterHandlers(IMessageInvoker invoker, IDispatcher dispatcher) => _invoker = invoker;
 
-        public void Start()
-        {
-        }
+    public void Start()
+    {
     }
 }

@@ -1,7 +1,7 @@
 ﻿using System;
-using Messages;
+using System.Threading.Tasks;
+using Common;
 using Proto;
-using Proto.Channels;
 using Proto.Remote;
 using Proto.Remote.GrpcNet;
 using static System.Threading.Channels.Channel;
@@ -15,6 +15,7 @@ var channel = CreateUnbounded<MyMessage>();
 _ = ChannelSubscriber.StartNew(system.Root, publisher, channel);
 
 Console.WriteLine("Waiting for messages");
+
 await foreach (var msg in channel.Reader.ReadAllAsync())
 {
     Console.WriteLine($"Got message {msg.Value}");

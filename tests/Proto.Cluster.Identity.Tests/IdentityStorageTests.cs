@@ -8,323 +8,335 @@ using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Proto.Cluster.Identity.Tests
+namespace Proto.Cluster.Identity.Tests;
+
+public abstract class IdentityStorageTests : IDisposable
 {
-    public abstract class IdentityStorageTests : IDisposable
+    private const int TimeoutMs = 2000;
+    private static int testId = 1;
+    private readonly IIdentityStorage _storage;
+    private readonly IIdentityStorage _storageInstance2;
+    private readonly ITestOutputHelper _testOutputHelper;
+
+    protected IdentityStorageTests(
+        Func<string, IIdentityStorage> storageFactory,
+        ITestOutputHelper testOutputHelper
+    )
     {
-        private const int TimeoutMs = 2000;
-        private static int testId = 1;
-        private readonly IIdentityStorage _storage;
-        private readonly IIdentityStorage _storageInstance2;
-        private readonly ITestOutputHelper _testOutputHelper;
+        _testOutputHelper = testOutputHelper;
+        var clusterName = $"test-{Guid.NewGuid().ToString("N").Substring(0, 6)}";
+        _storage = storageFactory(clusterName);
+        _storageInstance2 = storageFactory(clusterName);
+    }
 
-        protected IdentityStorageTests(
-            Func<string, IIdentityStorage> storageFactory,
-            ITestOutputHelper testOutputHelper
-        )
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing)
         {
-            _testOutputHelper = testOutputHelper;
-            var clusterName = $"test-{Guid.NewGuid().ToString("N").Substring(0, 6)}";
-            _storage = storageFactory(clusterName);
-            _storageInstance2 = storageFactory(clusterName);
+            return;
         }
 
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!disposing) return;
+        _storage?.Dispose();
+        _storageInstance2?.Dispose();
+    }
 
-            _storage?.Dispose();
-            _storageInstance2?.Dispose();
-        }
+    [Fact]
+    public async Task GlobalLockActivatesOnceOnly()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var identity = new ClusterIdentity { Kind = "thing", Identity = NextId().ToString() };
+        const int attempts = 10;
 
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+        var locks = await Task.WhenAll(Enumerable.Range(1, attempts)
+            .Select(i => _storage.TryAcquireLock(identity, timeout))
+        );
 
-        [Fact]
-        public async Task GlobalLockActivatesOnceOnly()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var identity = new ClusterIdentity {Kind = "thing", Identity = NextId().ToString()};
-            const int attempts = 10;
+        var successFullLock = locks.Where(it => it != null).ToList();
+        successFullLock.Should().HaveCount(1);
+        successFullLock.Single()!.ClusterIdentity.Should().BeEquivalentTo(identity);
+    }
 
-            var locks = await Task.WhenAll(Enumerable.Range(1, attempts)
-                .Select(i => _storage.TryAcquireLock(identity, timeout))
-            );
+    [Fact]
+    public async Task GlobalLockActivatesOnceOnlyAcrossMultipleClients()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var identity = new ClusterIdentity { Kind = "thing", Identity = "1234" };
+        const int attempts = 10;
 
-            var successFullLock = locks.Where(it => it != null).ToList();
-            successFullLock.Should().HaveCount(1);
-            successFullLock.Single()!.ClusterIdentity.Should().BeEquivalentTo(identity);
-        }
+        var locks = await Task.WhenAll(Enumerable.Range(1, attempts)
+            .SelectMany(_ => new[]
+                {
+                    _storage.TryAcquireLock(identity, timeout),
+                    _storageInstance2.TryAcquireLock(identity, timeout)
+                }
+            )
+        );
 
-        [Fact]
-        public async Task GlobalLockActivatesOnceOnlyAcrossMultipleClients()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var identity = new ClusterIdentity {Kind = "thing", Identity = "1234"};
-            const int attempts = 10;
+        var successfulLock = locks.Where(it => it != null).ToList();
+        successfulLock.Should().HaveCount(1);
+        successfulLock.Single()!.ClusterIdentity.Should().BeEquivalentTo(identity);
+    }
 
-            var locks = await Task.WhenAll(Enumerable.Range(1, attempts)
-                .SelectMany(_ => new[]
-                    {
-                        _storage.TryAcquireLock(identity, timeout),
-                        _storageInstance2.TryAcquireLock(identity, timeout)
-                    }
-                )
-            );
+    [Fact]
+    public async Task CannotTakeLockWhenAlreadyActivated()
+    {
+        var activator = GetFakeActivator();
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var identity = new ClusterIdentity { Kind = "thing", Identity = NextId().ToString() };
+        var spawnLock = await _storage.TryAcquireLock(identity, timeout);
+        var pid = Activate(activator, identity);
+        await _storage.StoreActivation(activator.Id, spawnLock!, pid, timeout);
 
-            var successfulLock = locks.Where(it => it != null).ToList();
-            successfulLock.Should().HaveCount(1);
-            successfulLock.Single()!.ClusterIdentity.Should().BeEquivalentTo(identity);
-        }
+        var activation = await _storage.TryGetExistingActivation(identity, timeout);
 
-        [Fact]
-        public async Task CannotTakeLockWhenAlreadyActivated()
-        {
-            var activator = GetFakeActivator();
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var identity = new ClusterIdentity {Kind = "thing", Identity = NextId().ToString()};
-            var spawnLock = await _storage.TryAcquireLock(identity, timeout);
-            var pid = Activate(activator, identity);
-            await _storage.StoreActivation(activator.Id, spawnLock!, pid, timeout);
+        activation.Should().NotBeNull();
+        activation?.MemberId.Should().Be(activator.Id);
+        activation?.Pid.Should().BeEquivalentTo(pid);
 
-            var activation = await _storage.TryGetExistingActivation(identity, timeout);
+        var noLock = await _storage.TryAcquireLock(identity, timeout);
 
-            activation.Should().NotBeNull();
-            activation?.MemberId.Should().Be(activator.Id);
-            activation?.Pid.Should().BeEquivalentTo(pid);
+        noLock.Should().BeNull("Since the activation is active, it should not be possible to take the lock");
+    }
 
-            var noLock = await _storage.TryAcquireLock(identity, timeout);
+    [Fact]
+    public async Task CanDeleteSpawnLocks()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var identity = new ClusterIdentity { Kind = "thing", Identity = NextId().ToString() };
 
-            noLock.Should().BeNull("Since the activation is active, it should not be possible to take the lock");
-        }
+        var spawnLock = await _storage.TryAcquireLock(identity, timeout);
 
-        [Fact]
-        public async Task CanDeleteSpawnLocks()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var identity = new ClusterIdentity {Kind = "thing", Identity = NextId().ToString()};
+        spawnLock.Should().NotBeNull();
 
-            var spawnLock = await _storage.TryAcquireLock(identity, timeout);
+        await _storage.RemoveLock(spawnLock!, timeout);
 
-            spawnLock.Should().NotBeNull();
+        var secondLock = await _storage.TryAcquireLock(identity, timeout);
 
-            await _storage.RemoveLock(spawnLock!, timeout);
+        secondLock.Should().NotBeNull("The initial lock should be cleared, and a second lock can be acquired.");
+    }
 
-            var secondLock = await _storage.TryAcquireLock(identity, timeout);
+    [Fact]
+    public async Task CanStoreActivation()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var (activator, identity, pid) = await GetActivatedClusterIdentity(timeout);
 
-            secondLock.Should().NotBeNull("The initial lock should be cleared, and a second lock can be acquired.");
-        }
+        var activation = await _storage.TryGetExistingActivation(identity, timeout);
 
-        [Fact]
-        public async Task CanStoreActivation()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var (activator, identity, pid) = await GetActivatedClusterIdentity(timeout);
+        activation.Should().NotBeNull();
+        activation?.MemberId.Should().Be(activator.Id);
+        activation?.Pid.Should().BeEquivalentTo(pid);
+    }
 
-            var activation = await _storage.TryGetExistingActivation(identity, timeout);
+    [Fact]
+    public async Task CannotStoreOverExisting()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var (activator, identity, _) = await GetActivatedClusterIdentity(timeout);
 
-            activation.Should().NotBeNull();
-            activation?.MemberId.Should().Be(activator.Id);
-            activation?.Pid.Should().BeEquivalentTo(pid);
-        }
+        var otherPid = Activate(activator, identity);
 
-        [Fact]
-        public async Task CannotStoreOverExisting()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var (activator, identity, _) = await GetActivatedClusterIdentity(timeout);
-
-            var otherPid = Activate(activator, identity);
-
-            await _storage.Invoking(storage =>
+        await _storage.Invoking(storage =>
                 storage.StoreActivation(activator.Id, new SpawnLock("someLockId", identity), otherPid, timeout)
-            ).Should().ThrowAsync<LockNotFoundException>();
-        }
+            )
+            .Should()
+            .ThrowAsync<LockNotFoundException>();
+    }
 
-        [Fact]
-        public async Task CannotStoreWithoutLock()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var activator = GetFakeActivator();
-            var identity = new ClusterIdentity {Kind = "thing", Identity = NextId().ToString()};
-            var spawnLock = new SpawnLock("not-a-lock", identity);
-            var pid = Activate(activator, identity);
+    [Fact]
+    public async Task CannotStoreWithoutLock()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var activator = GetFakeActivator();
+        var identity = new ClusterIdentity { Kind = "thing", Identity = NextId().ToString() };
+        var spawnLock = new SpawnLock("not-a-lock", identity);
+        var pid = Activate(activator, identity);
 
-            await _storage.Invoking(storage =>
+        await _storage.Invoking(storage =>
                 storage.StoreActivation(activator.Id, spawnLock, pid, timeout)
-            ).Should().ThrowAsync<LockNotFoundException>();
+            )
+            .Should()
+            .ThrowAsync<LockNotFoundException>();
+    }
+
+    [Fact]
+    public async Task CanRemoveActivation()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var (activator, identity, pid) = await GetActivatedClusterIdentity(timeout);
+
+        var activation = await _storage.TryGetExistingActivation(identity, timeout);
+
+        await _storage.RemoveActivation(identity, pid, timeout);
+
+        var afterRemoval = await _storage.TryGetExistingActivation(identity, timeout);
+
+        activation.Should().NotBeNull();
+        activation?.MemberId.Should().Be(activator.Id);
+        activation?.Pid.Should().BeEquivalentTo(pid);
+
+        afterRemoval.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DoesNotRemoveIfIdDoesNotMatch()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var (activator, identity, pid) = await GetActivatedClusterIdentity(timeout);
+
+        var differentPid = Activate(activator, identity);
+
+        var activation = await _storage.TryGetExistingActivation(identity, timeout);
+
+        await _storage.RemoveActivation(identity, differentPid, timeout);
+
+        var afterRemoval = await _storage.TryGetExistingActivation(identity, timeout);
+
+        activation.Should().NotBeNull();
+        activation?.MemberId.Should().Be(activator.Id);
+        activation?.Pid.Should().BeEquivalentTo(pid);
+
+        afterRemoval.Should().NotBeNull("Removal pid did not match id, even if it matched cluster identity");
+    }
+
+    [Fact]
+    public async Task CanRemoveByMember()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var (activator, identity, _) = await GetActivatedClusterIdentity(timeout);
+
+        await _storage.RemoveMember(activator.Id, timeout);
+
+        var storedActivation = await _storage.TryGetExistingActivation(identity, timeout);
+
+        storedActivation.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WillNotRemoveCurrentActivationByPrevMember()
+    {
+        var timeout = new CancellationTokenSource(TimeoutMs).Token;
+        var (originalActivator, identity, origPid) = await GetActivatedClusterIdentity(timeout);
+
+        await _storage.RemoveActivation(identity, origPid, timeout);
+
+        var (newActivator, _, newPid) = await GetActivatedClusterIdentity(timeout, identity: identity);
+
+        await _storage.RemoveMember(originalActivator.Id, timeout);
+
+        var activation = await _storage.TryGetExistingActivation(identity, timeout);
+
+        activation.Should().NotBeNull();
+        activation?.MemberId.Should().Be(newActivator.Id);
+        activation?.Pid.Should().BeEquivalentTo(newPid);
+    }
+
+    [Theory]
+    [InlineData(200, 10000)]
+    public async Task CanRemoveMemberWithManyActivations(int activations, int msTimeout)
+    {
+        var identities = new List<ClusterIdentity>();
+        var timeout = new CancellationTokenSource(msTimeout).Token;
+        var activator = GetFakeActivator();
+
+        for (var i = 0; i < activations; i++)
+        {
+            var (_, identity, _) = await GetActivatedClusterIdentity(timeout, activator);
+            identities.Add(identity);
         }
 
-        [Fact]
-        public async Task CanRemoveActivation()
+        var timer = Stopwatch.StartNew();
+        await _storage.RemoveMember(activator.Id, timeout);
+        timer.Stop();
+        _testOutputHelper.WriteLine($"Removed {activations} activations in {timer.Elapsed}");
+
+        foreach (var clusterIdentity in identities)
         {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var (activator, identity, pid) = await GetActivatedClusterIdentity(timeout);
-
-            var activation = await _storage.TryGetExistingActivation(identity, timeout);
-
-            await _storage.RemoveActivation(identity, pid, timeout);
-
-            var afterRemoval = await _storage.TryGetExistingActivation(identity, timeout);
-
-            activation.Should().NotBeNull();
-            activation?.MemberId.Should().Be(activator.Id);
-            activation?.Pid.Should().BeEquivalentTo(pid);
-
-            afterRemoval.Should().BeNull();
-        }
-
-        [Fact]
-        public async Task DoesNotRemoveIfIdDoesNotMatch()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var (activator, identity, pid) = await GetActivatedClusterIdentity(timeout);
-
-            var differentPid = Activate(activator, identity);
-
-            var activation = await _storage.TryGetExistingActivation(identity, timeout);
-
-            await _storage.RemoveActivation(identity, differentPid, timeout);
-
-            var afterRemoval = await _storage.TryGetExistingActivation(identity, timeout);
-
-            activation.Should().NotBeNull();
-            activation?.MemberId.Should().Be(activator.Id);
-            activation?.Pid.Should().BeEquivalentTo(pid);
-
-            afterRemoval.Should().NotBeNull("Removal pid did not match id, even if it matched cluster identity");
-        }
-
-        [Fact]
-        public async Task CanRemoveByMember()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var (activator, identity, _) = await GetActivatedClusterIdentity(timeout);
-
-            await _storage.RemoveMember(activator.Id, timeout);
-
-            var storedActivation = await _storage.TryGetExistingActivation(identity, timeout);
-
+            var storedActivation = await _storage.TryGetExistingActivation(clusterIdentity, timeout);
             storedActivation.Should().BeNull();
         }
+    }
 
-        [Fact]
-        public async Task WillNotRemoveCurrentActivationByPrevMember()
-        {
-            var timeout = new CancellationTokenSource(TimeoutMs).Token;
-            var (originalActivator, identity, origPid) = await GetActivatedClusterIdentity(timeout);
+    private async Task<(Member, ClusterIdentity, PID activation)> GetActivatedClusterIdentity(
+        CancellationToken timeout,
+        Member? activator = null,
+        ClusterIdentity? identity = null
+    )
+    {
+        activator ??= GetFakeActivator();
+        identity ??= new ClusterIdentity { Kind = "thing", Identity = NextId().ToString() };
+        var spawnLock = await _storage.TryAcquireLock(identity, timeout);
+        var pid = Activate(activator, identity);
+        await _storage.StoreActivation(activator.Id, spawnLock!, pid, timeout);
 
-            await _storage.RemoveActivation(identity, origPid, timeout);
+        var activation = await _storage.TryGetExistingActivation(identity, timeout);
 
-            var (newActivator, _, newPid) = await GetActivatedClusterIdentity(timeout, identity: identity);
+        return (activator, identity, activation!.Pid);
+    }
 
-            await _storage.RemoveMember(originalActivator.Id, timeout);
+    [Fact]
+    public async Task CanWaitForActivation()
+    {
+        var activator = GetFakeActivator();
+        var timeout = CancellationTokens.FromSeconds(15);
+        var identity = new ClusterIdentity { Kind = "thing", Identity = NextId().ToString() };
+        var spawnLock = await _storage.TryAcquireLock(identity, timeout);
+        var pid = Activate(activator, identity);
 
-            var activation = await _storage.TryGetExistingActivation(identity, timeout);
-
-            activation.Should().NotBeNull();
-            activation?.MemberId.Should().Be(newActivator.Id);
-            activation?.Pid.Should().BeEquivalentTo(newPid);
-        }
-
-        [Theory, InlineData(200, 10000)]
-        public async Task CanRemoveMemberWithManyActivations(int activations, int msTimeout)
-        {
-            var identities = new List<ClusterIdentity>();
-            var timeout = new CancellationTokenSource(msTimeout).Token;
-            var activator = GetFakeActivator();
-
-            for (var i = 0; i < activations; i++)
+        _ = SafeTask.Run(async () =>
             {
-                var (_, identity, _) = await GetActivatedClusterIdentity(timeout, activator);
-                identities.Add(identity);
-            }
+                await Task.Delay(500, timeout);
+                await _storage.StoreActivation(activator.Id, spawnLock!, pid, timeout);
+            }, timeout
+        );
 
-            var timer = Stopwatch.StartNew();
-            await _storage.RemoveMember(activator.Id, timeout);
-            timer.Stop();
-            _testOutputHelper.WriteLine($"Removed {activations} activations in {timer.Elapsed}");
+        var activation = await _storage.WaitForActivation(identity, timeout);
 
-            foreach (var clusterIdentity in identities)
-            {
-                var storedActivation = await _storage.TryGetExistingActivation(clusterIdentity, timeout);
-                storedActivation.Should().BeNull();
-            }
-        }
+        activation.Should().NotBeNull();
+        activation?.MemberId.Should().Be(activator.Id);
+        activation?.Pid.Should().BeEquivalentTo(pid);
+    }
 
-        private async Task<(Member, ClusterIdentity, PID activation)> GetActivatedClusterIdentity(
-            CancellationToken timeout,
-            Member? activator = null,
-            ClusterIdentity? identity = null
-        )
-        {
-            activator ??= GetFakeActivator();
-            identity ??= new ClusterIdentity {Kind = "thing", Identity = NextId().ToString()};
-            var spawnLock = await _storage.TryAcquireLock(identity, timeout);
-            var pid = Activate(activator, identity);
-            await _storage.StoreActivation(activator.Id, spawnLock!, pid, timeout);
+    [Fact]
+    public async Task RemovesLockIfStale()
+    {
+        var timeout = new CancellationTokenSource(10000).Token;
+        var identity = new ClusterIdentity { Kind = "thing", Identity = NextId().ToString() };
+        await _storage.TryAcquireLock(identity, timeout);
 
-            var activation = await _storage.TryGetExistingActivation(identity, timeout);
+        var activation = await _storage.WaitForActivation(identity, timeout);
+        var spawnLock = await _storage.TryAcquireLock(identity, timeout);
 
-            return (activator, identity, activation!.Pid);
-        }
+        activation.Should().BeNull("We did not activate it");
 
-        [Fact]
-        public async Task CanWaitForActivation()
-        {
-            var activator = GetFakeActivator();
-            var timeout = CancellationTokens.FromSeconds(15);
-            var identity = new ClusterIdentity {Kind = "thing", Identity = NextId().ToString()};
-            var spawnLock = await _storage.TryAcquireLock(identity, timeout);
-            var pid = Activate(activator, identity);
-
-            _ = SafeTask.Run(async () => {
-                    await Task.Delay(500, timeout);
-                    await _storage.StoreActivation(activator.Id, spawnLock!, pid, timeout);
-                }, timeout
-            );
-            var activation = await _storage.WaitForActivation(identity, timeout);
-
-            activation.Should().NotBeNull();
-            activation?.MemberId.Should().Be(activator.Id);
-            activation?.Pid.Should().BeEquivalentTo(pid);
-        }
-
-        [Fact]
-        public async Task RemovesLockIfStale()
-        {
-            var timeout = new CancellationTokenSource(10000).Token;
-            var identity = new ClusterIdentity {Kind = "thing", Identity = NextId().ToString()};
-            await _storage.TryAcquireLock(identity, timeout);
-
-            var activation = await _storage.WaitForActivation(identity, timeout);
-            var spawnLock = await _storage.TryAcquireLock(identity, timeout);
-
-            activation.Should().BeNull("We did not activate it");
-            spawnLock.Should().NotBeNull(
+        spawnLock.Should()
+            .NotBeNull(
                 "When an activation did not occur, the storage implementation should discard the lock"
             );
-        }
-
-        // ReSharper disable once SuggestBaseTypeForParameter
-        private PID Activate(Member activator, ClusterIdentity identity) =>
-            PID.FromAddress(activator.Address, $"placement-activator/{identity}${NextId()}");
-
-        private Member GetFakeActivator()
-        {
-            var activator = new Member
-            {
-                Host = "127.0.0.1",
-                Port = NextId(),
-                Id = Guid.NewGuid().ToString(),
-                Kinds = {"thing"}
-            };
-            return activator;
-        }
-
-        private int NextId() => Interlocked.Increment(ref testId);
     }
+
+    // ReSharper disable once SuggestBaseTypeForParameter
+    private PID Activate(Member activator, ClusterIdentity identity) =>
+        PID.FromAddress(activator.Address, $"placement-activator/{identity}${NextId()}");
+
+    private Member GetFakeActivator()
+    {
+        var activator = new Member
+        {
+            Host = "127.0.0.1",
+            Port = NextId(),
+            Id = Guid.NewGuid().ToString(),
+            Kinds = { "thing" }
+        };
+
+        return activator;
+    }
+
+    private int NextId() => Interlocked.Increment(ref testId);
 }

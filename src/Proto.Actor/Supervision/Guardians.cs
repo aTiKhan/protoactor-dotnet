@@ -3,75 +3,84 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Proto.Mailbox;
 
 // ReSharper disable once CheckNamespace
-namespace Proto
+namespace Proto;
+
+public class Guardians
 {
-    public class Guardians
+    private readonly ConcurrentDictionary<ISupervisorStrategy, GuardianProcess> _guardianStrategies = new();
+
+    public Guardians(ActorSystem system)
     {
-        private readonly ConcurrentDictionary<ISupervisorStrategy, GuardianProcess> _guardianStrategies = new();
+        System = system;
+    }
 
-        public Guardians(ActorSystem system) => System = system;
+    private ActorSystem System { get; }
 
-        private ActorSystem System { get; }
+    internal PID GetGuardianPid(ISupervisorStrategy strategy)
+    {
+        GuardianProcess ValueFactory(ISupervisorStrategy s) => new(System, s);
 
-        internal PID GetGuardianPid(ISupervisorStrategy strategy)
+        var guardian = _guardianStrategies.GetOrAdd(strategy, ValueFactory);
+
+        return guardian.Pid;
+    }
+}
+
+internal class GuardianProcess : Process, ISupervisor
+{
+    private readonly ISupervisorStrategy _supervisorStrategy;
+
+    internal GuardianProcess(ActorSystem system, ISupervisorStrategy strategy) : base(system)
+    {
+        _supervisorStrategy = strategy;
+
+        var name = $"$guardian{System.ProcessRegistry.NextId()}";
+        var (pid, ok) = System.ProcessRegistry.TryAdd(name, this);
+
+        if (!ok)
         {
-            GuardianProcess ValueFactory(ISupervisorStrategy s) => new(System, s);
+            throw new ProcessNameExistException(name, pid);
+        }
 
-            var guardian = _guardianStrategies.GetOrAdd(strategy, ValueFactory);
-            return guardian.Pid;
+        Pid = pid;
+    }
+
+    public PID Pid { get; }
+
+    public IImmutableSet<PID> Children =>
+        throw new MemberAccessException("Guardian does not hold its children PIDs.");
+
+    public void EscalateFailure(Exception reason, object? message) =>
+        throw new InvalidOperationException("Guardian cannot escalate failure.");
+
+    public void RestartChildren(Exception reason, params PID[] pids) =>
+        pids.SendSystemMessage(new Restart(reason), System);
+
+    public void StopChildren(params PID[] pids)
+    {
+        foreach (var pid in pids)
+        {
+            System.Root.Stop(pid);
         }
     }
 
-    class GuardianProcess : Process, ISupervisor
+    public void ResumeChildren(params PID[] pids) => pids.SendSystemMessage(ResumeMailbox.Instance, System);
+
+    protected internal override void SendUserMessage(PID pid, object message) =>
+        throw new InvalidOperationException("Guardian actor cannot receive any user messages.");
+
+    protected internal override void SendSystemMessage(PID pid, SystemMessage message)
     {
-        private readonly ISupervisorStrategy _supervisorStrategy;
-
-        internal GuardianProcess(ActorSystem system, ISupervisorStrategy strategy) : base(system)
+        if (message is Failure msg)
         {
-            _supervisorStrategy = strategy;
-
-            var name = $"Guardian{System.ProcessRegistry.NextId()}";
-            var (pid, ok) = System.ProcessRegistry.TryAdd(name, this);
-
-            if (!ok) throw new ProcessNameExistException(name, pid);
-
-            Pid = pid;
-        }
-
-        public PID Pid { get; }
-
-        public IImmutableSet<PID> Children =>
-            throw new MemberAccessException("Guardian does not hold its children PIDs.");
-
-        public void EscalateFailure(Exception reason, object? message) =>
-            throw new InvalidOperationException("Guardian cannot escalate failure.");
-
-        public void RestartChildren(Exception reason, params PID[] pids) =>
-            pids.SendSystemMessage(new Restart(reason), System);
-
-        public void StopChildren(params PID[] pids)
-        {
-            foreach (var pid in pids)
-            {
-                System.Root.Stop(pid);
-            }
-        }
-
-        public void ResumeChildren(params PID[] pids) => pids.SendSystemMessage(ResumeMailbox.Instance, System);
-
-        protected internal override void SendUserMessage(PID pid, object message)
-            => throw new InvalidOperationException("Guardian actor cannot receive any user messages.");
-
-        protected internal override void SendSystemMessage(PID pid, object message)
-        {
-            if (message is Failure msg)
-                _supervisorStrategy.HandleFailure(this, msg.Who, msg.RestartStatistics, msg.Reason, msg.Message);
+            _supervisorStrategy.HandleFailure(this, msg.Who, msg.RestartStatistics, msg.Reason, msg.Message);
         }
     }
 }

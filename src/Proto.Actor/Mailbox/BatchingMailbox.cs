@@ -9,101 +9,109 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Proto.Mailbox
+namespace Proto.Mailbox;
+
+public record MessageBatch(IList<object> Messages);
+
+public class BatchingMailbox : IMailbox
 {
-    public record MessageBatch(IList<object> Messages);
+    private readonly int _batchSize;
+    private readonly IMailboxQueue _systemMessages = new UnboundedMailboxQueue();
+    private readonly IMailboxQueue _userMessages = new UnboundedMailboxQueue();
+    private IDispatcher _dispatcher = null!;
+    private IMessageInvoker _invoker = null!;
 
-    public class BatchingMailbox : IMailbox
+    private int _status = MailboxStatus.Idle;
+    private bool _suspended;
+
+    public BatchingMailbox(int batchSize)
     {
-        private readonly int _batchSize;
-        private readonly IMailboxQueue _systemMessages = new UnboundedMailboxQueue();
-        private readonly IMailboxQueue _userMessages = new UnboundedMailboxQueue();
-        private IDispatcher _dispatcher = null!;
-        private IMessageInvoker _invoker = null!;
+        _batchSize = batchSize;
+    }
 
-        private int _status = MailboxStatus.Idle;
-        private bool _suspended;
+    public int UserMessageCount => _userMessages.Length;
 
-        public BatchingMailbox(int batchSize) => _batchSize = batchSize;
+    public void PostUserMessage(object msg)
+    {
+        _userMessages.Push(msg);
+        Schedule();
+    }
 
-        public int UserMessageCount => _userMessages.Length;
+    public void PostSystemMessage(object msg)
+    {
+        _systemMessages.Push(msg);
+        Schedule();
+    }
 
-        public void PostUserMessage(object msg)
+    public void RegisterHandlers(IMessageInvoker invoker, IDispatcher dispatcher)
+    {
+        _invoker = invoker;
+        _dispatcher = dispatcher;
+    }
+
+    public void Start()
+    {
+    }
+
+    private async Task RunAsync()
+    {
+        object? currentMessage = null;
+
+        try
         {
-            _userMessages.Push(msg);
-            Schedule();
-        }
+            var batch = new List<object>(_batchSize);
+            var msg = _systemMessages.Pop();
 
-        public void PostSystemMessage(object msg)
-        {
-            _systemMessages.Push(msg);
-            Schedule();
-        }
-
-        public void RegisterHandlers(IMessageInvoker invoker, IDispatcher dispatcher)
-        {
-            _invoker = invoker;
-            _dispatcher = dispatcher;
-        }
-
-        public void Start()
-        {
-        }
-
-        private async Task RunAsync()
-        {
-            object? currentMessage = null;
-
-            try
+            if (msg is SystemMessage sys)
             {
-                var batch = new List<object>(_batchSize);
-                var sys = _systemMessages.Pop();
-
-                if (sys is not null)
+                _suspended = sys switch
                 {
-                    _suspended = sys switch
-                    {
-                        //special system message at mailbox level
-                        SuspendMailbox _ => true,
-                        _                => _suspended
-                    };
-                    currentMessage = sys;
-                    await _invoker.InvokeSystemMessageAsync(sys);
-                }
+                    //special system message at mailbox level
+                    SuspendMailbox _ => true,
+                    _                => _suspended
+                };
 
-                if (!_suspended)
-                {
-                    batch.Clear();
-                    object? msg;
-
-                    while ((msg = _userMessages.Pop()) is not null ||
-                           batch.Count >= _batchSize)
-                    {
-                        batch.Add(msg!);
-                    }
-
-                    if (batch.Count > 0)
-                    {
-                        currentMessage = batch;
-                        await _invoker.InvokeUserMessageAsync(new MessageBatch(batch));
-                    }
-                }
-            }
-            catch (Exception x)
-            {
-                _suspended = true;
-                _invoker.EscalateFailure(x, currentMessage);
+                currentMessage = sys;
+                await _invoker.InvokeSystemMessageAsync(sys).ConfigureAwait(false);
             }
 
-            Interlocked.Exchange(ref _status, MailboxStatus.Idle);
+            if (!_suspended)
+            {
+                batch.Clear();
 
-            if (_systemMessages.HasMessages || (_userMessages.HasMessages && !_suspended)) Schedule();
+                while ((msg = _userMessages.Pop()) is not null ||
+                       batch.Count >= _batchSize)
+                {
+                    batch.Add(msg!);
+                }
+
+                if (batch.Count > 0)
+                {
+                    currentMessage = batch;
+                    await _invoker.InvokeUserMessageAsync(new MessageBatch(batch)).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception x)
+        {
+            x.CheckFailFast();
+            _suspended = true;
+            _invoker.EscalateFailure(x, currentMessage);
         }
 
-        private void Schedule()
+        Interlocked.Exchange(ref _status, MailboxStatus.Idle);
+
+        if (_systemMessages.HasMessages || (_userMessages.HasMessages && !_suspended))
         {
-            if (Interlocked.CompareExchange(ref _status, MailboxStatus.Busy, MailboxStatus.Idle) == MailboxStatus.Idle)
-                _dispatcher.Schedule(RunAsync);
+            Schedule();
+        }
+    }
+
+    private void Schedule()
+    {
+        if (Interlocked.CompareExchange(ref _status, MailboxStatus.Busy, MailboxStatus.Idle) == MailboxStatus.Idle)
+        {
+            _dispatcher.Schedule(RunAsync);
         }
     }
 }

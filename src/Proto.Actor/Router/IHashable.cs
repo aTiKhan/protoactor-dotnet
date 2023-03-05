@@ -3,10 +3,17 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
-namespace Proto.Router
+
+namespace Proto.Router;
+
+/// <summary>
+///     Adds a capability to a message to return a hash key. Used in conjunction with routers.
+/// </summary>
+public interface IHashable
 {
-    public interface IHashable
-    {
-        string HashBy();
-    }
+    /// <summary>
+    ///     Return the hash key for this message.
+    /// </summary>
+    /// <returns></returns>
+    string HashBy();
 }

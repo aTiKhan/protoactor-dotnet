@@ -1,18 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk" ToolsVersion="15.0">
 
     <PropertyGroup>
-        <LangVersion>9</LangVersion>
-        <TargetFrameworks>net5.0;net6.0;netstandard2.1</TargetFrameworks>
+        <LangVersion>10</LangVersion>
+        <TargetFrameworks>netcoreapp3.1;net6.0;net7.0</TargetFrameworks>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="AWSSDK.ECS" Version="3.7.4.26" />
-        <PackageReference Include="Microsoft.AspNetCore.JsonPatch" Version="6.0.1" />
-        <PackageReference Update="Microsoft.SourceLink.GitHub" Version="1.1.1" />
+        <PackageReference Include="Microsoft.AspNetCore.JsonPatch" Version="6.0.12" />
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Proto.Cluster\Proto.Cluster.csproj" />
+        <ProjectReference Include="..\Proto.Cluster\Proto.Cluster.csproj" />
     </ItemGroup>
 
 </Project>

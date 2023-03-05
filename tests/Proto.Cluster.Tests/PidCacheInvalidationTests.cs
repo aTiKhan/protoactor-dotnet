@@ -3,6 +3,7 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -11,56 +12,64 @@ using ClusterTest.Messages;
 using FluentAssertions;
 using Xunit;
 
-namespace Proto.Cluster.Tests
+namespace Proto.Cluster.Tests;
+
+[Collection("ClusterTests")]
+public class PidCacheInvalidationTests : IClassFixture<InMemoryPidCacheInvalidationClusterFixture>
 {
-    public class PidCacheInvalidationTests : IClassFixture<InMemoryPidCacheInvalidationClusterFixture>
+    public PidCacheInvalidationTests(InMemoryPidCacheInvalidationClusterFixture clusterFixture)
     {
-        private InMemoryPidCacheInvalidationClusterFixture ClusterFixture { get; }
+        ClusterFixture = clusterFixture;
+    }
 
-        private IList<Cluster> Members => ClusterFixture.Members;
+    private InMemoryPidCacheInvalidationClusterFixture ClusterFixture { get; }
 
-        public PidCacheInvalidationTests(InMemoryPidCacheInvalidationClusterFixture clusterFixture) => ClusterFixture = clusterFixture;
+    private IList<Cluster> Members => ClusterFixture.Members;
 
-        [Fact]
-        public async Task PidCacheInvalidatesCorrectly()
-        {
-            const string id = "1";
+    [Fact]
+    public async Task PidCacheInvalidatesCorrectly()
+    {
+        const string id = "1";
 
-            var remoteMember = await GetRemoteMemberFromActivation(id);
-            var cachedPid = GetFromPidCache(remoteMember, id);
+        var remoteMember = await GetRemoteMemberFromActivation(id);
+        var cachedPid = GetFromPidCache(remoteMember, id);
 
-            cachedPid.Should().NotBeNull();
-            await remoteMember.RequestAsync<object>(id, EchoActor.Kind, new Die(), CancellationToken.None);
+        cachedPid.Should().NotBeNull();
+        await remoteMember.RequestAsync<object>(id, EchoActor.Kind, new Die(), CancellationToken.None);
 
-            await Task.Delay(2000); // PidCache is asynchronously cleared, allow the system to purge it
+        await Task.Delay(2000); // PidCache is asynchronously cleared, allow the system to purge it
 
-            var cachedPidAfterStopping = GetFromPidCache(remoteMember, id);
+        var cachedPidAfterStopping = GetFromPidCache(remoteMember, id);
 
-            cachedPidAfterStopping.Should().BeNull();
-        }
+        cachedPidAfterStopping.Should().BeNull();
+    }
 
-        private static PID GetFromPidCache(Cluster remoteMember, string id)
-        {
-            remoteMember.PidCache.TryGet(new ClusterIdentity
-                {
-                    Identity = id,
-                    Kind = EchoActor.Kind
-                }, out var activation
-            );
-            return activation;
-        }
-
-        private async Task<Cluster> GetRemoteMemberFromActivation(string id)
-        {
-            foreach (var member in Members)
+    private static PID GetFromPidCache(Cluster remoteMember, string id)
+    {
+        remoteMember.PidCache.TryGet(new ClusterIdentity
             {
-                var response = await member.RequestAsync<HereIAm>(id, EchoActor.Kind, new WhereAreYou(), CancellationToken.None);
+                Identity = id,
+                Kind = EchoActor.Kind
+            }, out var activation
+        );
 
-                // Get the first member which does not have the activation local to it.
-                if (!response.Address.Equals(member.System.Address, StringComparison.OrdinalIgnoreCase)) return member;
+        return activation;
+    }
+
+    private async Task<Cluster> GetRemoteMemberFromActivation(string id)
+    {
+        foreach (var member in Members)
+        {
+            var response =
+                await member.RequestAsync<HereIAm>(id, EchoActor.Kind, new WhereAreYou(), CancellationToken.None);
+
+            // Get the first member which does not have the activation local to it.
+            if (!response.Address.Equals(member.System.Address, StringComparison.OrdinalIgnoreCase))
+            {
+                return member;
             }
-
-            throw new Exception("Something wrong here..");
         }
+
+        throw new Exception("Something wrong here..");
     }
 }

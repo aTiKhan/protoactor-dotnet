@@ -3,41 +3,46 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Xunit;
 
-namespace Proto.Mailbox.Tests
+namespace Proto.Mailbox.Tests;
+
+public class MessageBatchTests
 {
-    public class MessageBatchTests
+    [Fact]
+    public async Task CanUnpackMessagesFromBatchAndReceiveInOrder()
     {
-        [Fact]
-        public async Task CanUnpackMessagesFromBatchAndReceiveInOrder()
-        {
-            var batch = new MyMessageBatch();
+        var batch = new MyMessageBatch();
 
-            var messages = new List<object>();
+        var messages = new List<object>();
 
-            var system = new ActorSystem();
-            var props = Props.FromFunc(ctx => {
-                    if (ctx.Message is string str) messages.Add(str);
+        var system = new ActorSystem();
 
-                    return Task.CompletedTask;
+        var props = Props.FromFunc(ctx =>
+            {
+                if (ctx.Message is string str)
+                {
+                    messages.Add(str);
                 }
-            );
 
-            var pid = system.Root.Spawn(props);
-            system.Root.Send(pid, batch);
-            await system.Root.PoisonAsync(pid);
+                return Task.CompletedTask;
+            }
+        );
 
-            var expected = new[] {"hello", "world", "batch"};
-            messages.Should().ContainInOrder(expected);
-        }
+        var pid = system.Root.Spawn(props);
+        system.Root.Send(pid, batch);
+        await system.Root.PoisonAsync(pid);
 
-        private class MyMessageBatch : IMessageBatch
-        {
-            public IReadOnlyCollection<object> GetMessages() => new[] {"hello", "world", "batch"};
-        }
+        var expected = new[] { "hello", "world", "batch" };
+        messages.Should().ContainInOrder(expected);
+    }
+
+    private class MyMessageBatch : IMessageBatch
+    {
+        public IReadOnlyCollection<object> GetMessages() => new[] { "hello", "world", "batch" };
     }
 }

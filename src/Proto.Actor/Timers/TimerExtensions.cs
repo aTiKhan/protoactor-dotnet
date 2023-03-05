@@ -1,7 +1,11 @@
-namespace Proto.Timers
+namespace Proto.Timers;
+
+public static class TimerExtensions
 {
-    public static class TimerExtensions
-    {
-        public static Scheduler Scheduler(this ISenderContext context) => new(context);
-    }
+    /// <summary>
+    ///     Gets a new scheduler that allows to schedule messages in the future
+    /// </summary>
+    /// <param name="context"></param>
+    /// <returns></returns>
+    public static Scheduler Scheduler(this ISenderContext context) => new(context);
 }

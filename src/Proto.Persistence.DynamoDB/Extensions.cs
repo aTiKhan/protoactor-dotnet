@@ -4,57 +4,73 @@ using System.Reflection;
 using Amazon.DynamoDBv2.DataModel;
 using Amazon.DynamoDBv2.DocumentModel;
 
-namespace Proto.Persistence.DynamoDB
+namespace Proto.Persistence.DynamoDB;
+
+public static class Extensions
 {
-    public static class Extensions
+    private static MethodInfo fromDocumentMi;
+
+    private static MethodInfo toDocumentMi;
+
+    public static DynamoDBEntry GetValueOrThrow(this Document doc, string attribute)
     {
-        private static MethodInfo fromDocumentMi;
+        var success = doc.TryGetValue(attribute, out var entry);
 
-        private static MethodInfo toDocumentMi;
-
-        public static DynamoDBEntry GetValueOrThrow(this Document doc, string attribute)
+        if (!success)
         {
-            var success = doc.TryGetValue(attribute, out var entry);
-
-            if (!success) throw new InvalidOperationException("Attribute does NOT exists: " + attribute);
-
-            return entry;
+            throw new InvalidOperationException("Attribute does NOT exists: " + attribute);
         }
 
-        public static object FromDocumentDynamic(this DynamoDBContext ctx, Document doc, Type type)
+        return entry;
+    }
+
+    public static object FromDocumentDynamic(this DynamoDBContext ctx, Document doc, Type type)
+    {
+        if (fromDocumentMi == null)
         {
-            if (fromDocumentMi == null)
-                fromDocumentMi = typeof(DynamoDBContext).GetMethods().First(m => m.Name == "FromDocument" && m.GetParameters().Length == 1);
-
-            var obj = fromDocumentMi
-                .MakeGenericMethod(type)
-                .Invoke(ctx, new object[] {doc});
-
-            return obj;
+            fromDocumentMi = typeof(DynamoDBContext).GetMethods()
+                .First(m => m.Name == "FromDocument" && m.GetParameters().Length == 1);
         }
 
-        public static Document ToDocumentDynamic(this DynamoDBContext ctx, object obj, Type objType)
+        var obj = fromDocumentMi
+            .MakeGenericMethod(type)
+            .Invoke(ctx, new object[] { doc });
+
+        return obj;
+    }
+
+    public static Document ToDocumentDynamic(this DynamoDBContext ctx, object obj, Type objType)
+    {
+        if (toDocumentMi == null)
         {
-            if (toDocumentMi == null)
-                toDocumentMi = typeof(DynamoDBContext).GetMethods().First(m => m.Name == "ToDocument" && m.GetParameters().Count() == 1);
-
-            var doc = toDocumentMi
-                .MakeGenericMethod(objType)
-                .Invoke(ctx, new[] {obj}) as Document;
-
-            return doc;
+            toDocumentMi = typeof(DynamoDBContext).GetMethods()
+                .First(m => m.Name == "ToDocument" && m.GetParameters().Count() == 1);
         }
 
-        public static string AssemblyQualifiedNameSimple(this Type type)
+        var doc = toDocumentMi
+            .MakeGenericMethod(objType)
+            .Invoke(ctx, new[] { obj }) as Document;
+
+        return doc;
+    }
+
+    public static string AssemblyQualifiedNameSimple(this Type type)
+    {
+        var name = type.AssemblyQualifiedName;
+        var index1St = name.IndexOf(",");
+
+        if (index1St < 0)
         {
-            var name = type.AssemblyQualifiedName;
-            var index1St = name.IndexOf(",");
-            if (index1St < 0) return name;
-
-            var index2nd = name.IndexOf(",", index1St + 1);
-            if (index2nd < 0) return name;
-
-            return name.Substring(0, index2nd);
+            return name;
         }
+
+        var index2nd = name.IndexOf(",", index1St + 1);
+
+        if (index2nd < 0)
+        {
+            return name;
+        }
+
+        return name.Substring(0, index2nd);
     }
 }

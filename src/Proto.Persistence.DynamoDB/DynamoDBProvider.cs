@@ -11,185 +11,211 @@ using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.DataModel;
 using Amazon.DynamoDBv2.DocumentModel;
 
-namespace Proto.Persistence.DynamoDB
+namespace Proto.Persistence.DynamoDB;
+
+public class DynamoDBProvider : IProvider, IDisposable
 {
-    public class DynamoDBProvider : IProvider, IDisposable
+    private readonly DynamoDBContext _dynamoDBContext;
+    private readonly Table _eventsTable;
+    private readonly DynamoDBProviderOptions _options;
+    private readonly Table _snapshotsTable;
+
+    public DynamoDBProvider(IAmazonDynamoDB dynamoDBClient, DynamoDBProviderOptions options)
     {
-        private readonly DynamoDBContext _dynamoDBContext;
-        private readonly Table _eventsTable;
-        private readonly DynamoDBProviderOptions _options;
-        private readonly Table _snapshotsTable;
-
-        public DynamoDBProvider(IAmazonDynamoDB dynamoDBClient, DynamoDBProviderOptions options)
+        if (dynamoDBClient == null)
         {
-            if (dynamoDBClient == null) throw new ArgumentNullException(nameof(dynamoDBClient));
-
-            _options = options ?? throw new ArgumentNullException(nameof(options));
-
-            _dynamoDBContext = new DynamoDBContext(
-                dynamoDBClient, new DynamoDBContextConfig {Conversion = DynamoDBEntryConversion.V2, ConsistentRead = true}
-            );
-            _eventsTable = Table.LoadTable(dynamoDBClient, options.EventsTableName, DynamoDBEntryConversion.V2);
-            _snapshotsTable = Table.LoadTable(dynamoDBClient, options.SnapshotsTableName, DynamoDBEntryConversion.V2);
+            throw new ArgumentNullException(nameof(dynamoDBClient));
         }
 
-        public async Task<long> GetEventsAsync(string actorName, long indexStart, long indexEnd, Action<object> callback)
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+
+        _dynamoDBContext = new DynamoDBContext(
+            dynamoDBClient, new DynamoDBContextConfig { Conversion = DynamoDBEntryConversion.V2, ConsistentRead = true }
+        );
+
+        _eventsTable = Table.LoadTable(dynamoDBClient, options.EventsTableName, DynamoDBEntryConversion.V2);
+        _snapshotsTable = Table.LoadTable(dynamoDBClient, options.SnapshotsTableName, DynamoDBEntryConversion.V2);
+    }
+
+    public async Task<long> GetEventsAsync(string actorName, long indexStart, long indexEnd, Action<object> callback)
+    {
+        var config = new QueryOperationConfig { ConsistentRead = true };
+        config.Filter.AddCondition(_options.EventsTableHashKey, QueryOperator.Equal, actorName);
+        config.Filter.AddCondition(_options.EventsTableSortKey, QueryOperator.Between, indexStart, indexEnd);
+        var query = _eventsTable.Query(config);
+
+        var lastIndex = -1L;
+
+        while (true)
         {
-            var config = new QueryOperationConfig {ConsistentRead = true};
-            config.Filter.AddCondition(_options.EventsTableHashKey, QueryOperator.Equal, actorName);
-            config.Filter.AddCondition(_options.EventsTableSortKey, QueryOperator.Between, indexStart, indexEnd);
-            var query = _eventsTable.Query(config);
+            var results = await query.GetNextSetAsync().ConfigureAwait(false);
 
-            var lastIndex = -1L;
-
-            while (true)
+            foreach (var doc in results)
             {
-                var results = await query.GetNextSetAsync();
-
-                foreach (var doc in results)
-                {
-                    callback(GetData(doc));
-                    lastIndex++;
-                }
-
-                if (query.IsDone) break;
+                callback(GetData(doc));
+                lastIndex++;
             }
 
-            return lastIndex;
-
-            object GetData(Document doc)
+            if (query.IsDone)
             {
-                var dataTypeE = doc.GetValueOrThrow(_options.EventsTableDataTypeKey);
-                var dataE = doc.GetValueOrThrow(_options.EventsTableDataKey);
-
-                var dataType = Type.GetType(dataTypeE.AsString());
-                return _dynamoDBContext.FromDocumentDynamic(dataE.AsDocument(), dataType);
+                break;
             }
         }
 
-        public async Task<(object Snapshot, long Index)> GetSnapshotAsync(string actorName)
+        return lastIndex;
+
+        object GetData(Document doc)
         {
-            var config = new QueryOperationConfig {ConsistentRead = true, BackwardSearch = true, Limit = 1};
-            config.Filter.AddCondition(_options.SnapshotsTableHashKey, QueryOperator.Equal, actorName);
-            var query = _snapshotsTable.Query(config);
-            var results = await query.GetNextSetAsync();
-            var doc = results.FirstOrDefault();
-
-            if (doc == null) return (null, 0);
-
-            var snapshotIndexE = doc.GetValueOrThrow(_options.SnapshotsTableSortKey);
-            var dataTypeE = doc.GetValueOrThrow(_options.SnapshotsTableDataTypeKey);
-            var dataE = doc.GetValueOrThrow(_options.SnapshotsTableDataKey);
+            var dataTypeE = doc.GetValueOrThrow(_options.EventsTableDataTypeKey);
+            var dataE = doc.GetValueOrThrow(_options.EventsTableDataKey);
 
             var dataType = Type.GetType(dataTypeE.AsString());
-            var data = _dynamoDBContext.FromDocumentDynamic(dataE.AsDocument(), dataType);
 
-            return (data, snapshotIndexE.AsLong());
+            return _dynamoDBContext.FromDocumentDynamic(dataE.AsDocument(), dataType);
+        }
+    }
+
+    public async Task<(object Snapshot, long Index)> GetSnapshotAsync(string actorName)
+    {
+        var config = new QueryOperationConfig { ConsistentRead = true, BackwardSearch = true, Limit = 1 };
+        config.Filter.AddCondition(_options.SnapshotsTableHashKey, QueryOperator.Equal, actorName);
+        var query = _snapshotsTable.Query(config);
+        var results = await query.GetNextSetAsync().ConfigureAwait(false);
+        var doc = results.FirstOrDefault();
+
+        if (doc == null)
+        {
+            return (null, 0);
         }
 
-        public async Task<long> PersistEventAsync(string actorName, long index, object eventData)
+        var snapshotIndexE = doc.GetValueOrThrow(_options.SnapshotsTableSortKey);
+        var dataTypeE = doc.GetValueOrThrow(_options.SnapshotsTableDataTypeKey);
+        var dataE = doc.GetValueOrThrow(_options.SnapshotsTableDataKey);
+
+        var dataType = Type.GetType(dataTypeE.AsString());
+        var data = _dynamoDBContext.FromDocumentDynamic(dataE.AsDocument(), dataType);
+
+        return (data, snapshotIndexE.AsLong());
+    }
+
+    public async Task<long> PersistEventAsync(string actorName, long index, object eventData)
+    {
+        var dataType = eventData.GetType();
+        var data = _dynamoDBContext.ToDocumentDynamic(eventData, dataType);
+
+        var doc = new Document
         {
-            var dataType = eventData.GetType();
-            var data = _dynamoDBContext.ToDocumentDynamic(eventData, dataType);
+            { _options.EventsTableHashKey, actorName },
+            { _options.EventsTableSortKey, index },
+            { _options.EventsTableDataKey, data },
+            { _options.EventsTableDataTypeKey, dataType.AssemblyQualifiedNameSimple() }
+        };
 
-            var doc = new Document
+        await _eventsTable.PutItemAsync(doc).ConfigureAwait(false);
+
+        return index++;
+    }
+
+    public async Task PersistSnapshotAsync(string actorName, long index, object snapshotData)
+    {
+        var dataType = snapshotData.GetType();
+        var data = _dynamoDBContext.ToDocumentDynamic(snapshotData, dataType);
+
+        var doc = new Document
+        {
+            { _options.SnapshotsTableHashKey, actorName },
+            { _options.SnapshotsTableSortKey, index },
+            { _options.SnapshotsTableDataKey, data },
+            { _options.SnapshotsTableDataTypeKey, dataType.AssemblyQualifiedNameSimple() }
+        };
+
+        await _snapshotsTable.PutItemAsync(doc).ConfigureAwait(false);
+    }
+
+    public async Task DeleteEventsAsync(string actorName, long inclusiveToIndex)
+    {
+        // We don't need to query data. Indexes start with one and are sequential.
+        var write = _eventsTable.CreateBatchWrite();
+        var writeCount = 0;
+
+        for (var ei = 1; ei <= inclusiveToIndex; ei++)
+        {
+            write.AddKeyToDelete(actorName, ei);
+
+            if (++writeCount >= 25) // 25 is max
             {
-                {_options.EventsTableHashKey, actorName},
-                {_options.EventsTableSortKey, index},
-                {_options.EventsTableDataKey, data},
-                {_options.EventsTableDataTypeKey, dataType.AssemblyQualifiedNameSimple()}
-            };
-
-            await _eventsTable.PutItemAsync(doc);
-
-            return index++;
+                await write.ExecuteAsync().ConfigureAwait(false);
+                write = _eventsTable.CreateBatchWrite();
+                writeCount = 0;
+            }
         }
 
-        public async Task PersistSnapshotAsync(string actorName, long index, object snapshotData)
+        if (writeCount > 0)
         {
-            var dataType = snapshotData.GetType();
-            var data = _dynamoDBContext.ToDocumentDynamic(snapshotData, dataType);
-
-            var doc = new Document
-            {
-                {_options.SnapshotsTableHashKey, actorName},
-                {_options.SnapshotsTableSortKey, index},
-                {_options.SnapshotsTableDataKey, data},
-                {_options.SnapshotsTableDataTypeKey, dataType.AssemblyQualifiedNameSimple()}
-            };
-            await _snapshotsTable.PutItemAsync(doc);
+            await write.ExecuteAsync().ConfigureAwait(false);
         }
+    }
 
-        public async Task DeleteEventsAsync(string actorName, long inclusiveToIndex)
+    public async Task DeleteSnapshotsAsync(string actorName, long inclusiveToIndex)
+    {
+        // We do query before deletion because snapshots can be rare (just few indexes).
+        var config = new QueryOperationConfig { ConsistentRead = true };
+        config.Filter.AddCondition(_options.SnapshotsTableHashKey, QueryOperator.Equal, actorName);
+        config.Filter.AddCondition(_options.SnapshotsTableSortKey, QueryOperator.LessThanOrEqual, inclusiveToIndex);
+        var query = _snapshotsTable.Query(config);
+
+        var write = _snapshotsTable.CreateBatchWrite();
+        var writeCount = 0;
+
+        while (true)
         {
-            // We don't need to query data. Indexes start with one and are sequential.
-            var write = _eventsTable.CreateBatchWrite();
-            var writeCount = 0;
+            var results = await query.GetNextSetAsync().ConfigureAwait(false);
 
-            for (var ei = 1; ei <= inclusiveToIndex; ei++)
+            foreach (var doc in results)
             {
-                write.AddKeyToDelete(actorName, ei);
+                write.AddItemToDelete(doc);
 
                 if (++writeCount >= 25) // 25 is max
                 {
-                    await write.ExecuteAsync();
-                    write = _eventsTable.CreateBatchWrite();
+                    await write.ExecuteAsync().ConfigureAwait(false);
+                    write = _snapshotsTable.CreateBatchWrite();
                     writeCount = 0;
                 }
             }
 
-            if (writeCount > 0) await write.ExecuteAsync();
-        }
-
-        public async Task DeleteSnapshotsAsync(string actorName, long inclusiveToIndex)
-        {
-            // We do query before deletion because snapshots can be rare (just few indexes).
-            var config = new QueryOperationConfig {ConsistentRead = true};
-            config.Filter.AddCondition(_options.SnapshotsTableHashKey, QueryOperator.Equal, actorName);
-            config.Filter.AddCondition(_options.SnapshotsTableSortKey, QueryOperator.LessThanOrEqual, inclusiveToIndex);
-            var query = _snapshotsTable.Query(config);
-
-            var write = _snapshotsTable.CreateBatchWrite();
-            var writeCount = 0;
-
-            while (true)
+            if (query.IsDone)
             {
-                var results = await query.GetNextSetAsync();
-
-                foreach (var doc in results)
-                {
-                    write.AddItemToDelete(doc);
-
-                    if (++writeCount >= 25) // 25 is max
-                    {
-                        await write.ExecuteAsync();
-                        write = _snapshotsTable.CreateBatchWrite();
-                        writeCount = 0;
-                    }
-                }
-
-                if (query.IsDone) break;
+                break;
             }
-
-            if (writeCount > 0) await write.ExecuteAsync();
         }
 
-        #region IDisposable Support
-
-        private bool _disposedValue; // To detect redundant calls
-
-        protected virtual void Dispose(bool disposing)
+        if (writeCount > 0)
         {
-            if (_disposedValue) return;
+            await write.ExecuteAsync().ConfigureAwait(false);
+        }
+    }
 
-            if (disposing) _dynamoDBContext?.Dispose();
+    #region IDisposable Support
 
-            _disposedValue = true;
+    private bool _disposedValue; // To detect redundant calls
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposedValue)
+        {
+            return;
         }
 
-        // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
-        void IDisposable.Dispose() => Dispose(true);
+        if (disposing)
+        {
+            _dynamoDBContext?.Dispose();
+        }
 
-        #endregion
+        _disposedValue = true;
     }
+
+    // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
+    void IDisposable.Dispose() => Dispose(true);
+
+    #endregion
 }

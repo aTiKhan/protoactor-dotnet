@@ -5,72 +5,80 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClusterTest.Messages;
 using FluentAssertions;
+using Proto.Utils;
 using Xunit;
 
-namespace Proto.Cluster.Tests
+namespace Proto.Cluster.Tests;
+
+[Collection("ClusterTests")]
+public class OrderedDeliveryTests : ClusterTestBase, IClassFixture<OrderedDeliveryTests.OrderedDeliveryFixture>
 {
-    public class OrderedDeliveryTests : ClusterTestBase, IClassFixture<OrderedDeliveryTests.OrderedDeliveryFixture>
+    public OrderedDeliveryTests(OrderedDeliveryFixture clusterFixture) : base(
+        clusterFixture
+    )
     {
-        public OrderedDeliveryTests( OrderedDeliveryFixture clusterFixture) : base(
-            clusterFixture
-        )
+    }
+
+    [Theory]
+    [InlineData(20, 10, 20000)]
+    public async Task OrderedDeliveryFromActors(int sendingActors, int messagesSentPerCall, int timeoutMs)
+    {
+        
+        var aggregatorId = CreateIdentity("agg-1");
+
+        var timeout = new CancellationTokenSource(timeoutMs).Token;
+
+        var sendToRequest = new SendToRequest
         {
-        }
+            Count = messagesSentPerCall,
+            Id = aggregatorId
+        };
 
-        [Theory, InlineData(1000, 10, 8000)]
-        public async Task OrderedDeliveryFromActors(int sendingActors, int messagesSentPerCall, int timeoutMs)
-        {
-            var aggregatorId = CreateIdentity("agg-1");
+        var sendRequestsSent = Members.SelectMany(
+                cluster => GetActorIds(sendingActors)
+                    .Select(id => cluster.RequestAsync<Ack>(id, SenderActor.Kind, sendToRequest, timeout))
+            )
+            .ToList();
 
-            var timeout = new CancellationTokenSource(timeoutMs).Token;
+        await Task.WhenAll(sendRequestsSent);
 
-            var sendToRequest = new SendToRequest
-            {
-                Count = messagesSentPerCall,
-                Id = aggregatorId
-            };
-            var sendRequestsSent = Members.SelectMany(
-                    cluster => GetActorIds(sendingActors)
-                        .Select(id => cluster.RequestAsync<Ack>(id, SenderActor.Kind, sendToRequest, timeout))
-                )
-                .ToList();
-
-            await Task.WhenAll(sendRequestsSent);
-
-            var result = await Members.First().RequestAsync<AggregatorResult>(aggregatorId, VerifyOrderActor.Kind,
+        var result = await Members.First()
+            .RequestAsync<AggregatorResult>(aggregatorId, VerifyOrderActor.Kind,
                 new AskAggregator(),
                 new CancellationTokenSource(5000).Token
             );
 
-            result.Should().NotBeNull("We expect a response from the aggregator actor");
-            result.SequenceKeyCount.Should().Be(sendRequestsSent.Count, "We expect a unique id per send request");
-            result.SenderKeyCount.Should().Be(sendingActors, "We expect a single instantiation per sender id");
-            result.OutOfOrderCount.Should().Be(0, "Messages from one actor to another should be received in order");
-            result.TotalMessages.Should().Be(sendRequestsSent.Count * messagesSentPerCall);
-        }
+        result.Should().NotBeNull("We expect a response from the aggregator actor");
+        result.SequenceKeyCount.Should().Be(sendRequestsSent.Count, "We expect a unique id per send request");
+        result.SenderKeyCount.Should().Be(sendingActors, "We expect a single instantiation per sender id");
+        result.OutOfOrderCount.Should().Be(0, "Messages from one actor to another should be received in order");
+        result.TotalMessages.Should().Be(sendRequestsSent.Count * messagesSentPerCall);
+    }
 
-        private class SenderActor : IActor
+    private class SenderActor : IActor
+    {
+        public const string Kind = "sender";
+
+        private string _instanceId;
+        private int _seq;
+
+        public async Task ReceiveAsync(IContext context)
         {
-            public const string Kind = "sender";
-
-            private string _instanceId;
-            private int _seq;
-
-            public async Task ReceiveAsync(IContext context)
+            switch (context.Message)
             {
-                switch (context.Message)
-                {
-                    case Started _:
-                        var init = context.ClusterIdentity();
-                        _instanceId = $"{init!.Kind}:{init.Identity}.{Guid.NewGuid():N}";
-                        break;
-                    case SendToRequest sendTo:
+                case Started _:
+                    var init = context.ClusterIdentity();
+                    _instanceId = $"{init!.Kind}:{init.Identity}.{Guid.NewGuid():N}";
 
-                        var key = Guid.NewGuid().ToString("N");
+                    break;
+                case SendToRequest sendTo:
 
-                        for (var i = 0; i < sendTo.Count; i++)
-                        {
-                            await context.Cluster().RequestAsync<Ack>(sendTo.Id, VerifyOrderActor.Kind,
+                    var key = Guid.NewGuid().ToString("N");
+
+                    for (var i = 0; i < sendTo.Count; i++)
+                    {
+                        await context.Cluster()
+                            .RequestAsync<Ack>(sendTo.Id, VerifyOrderActor.Kind,
                                 new SequentialIdRequest
                                 {
                                     SequenceKey = key,
@@ -78,77 +86,89 @@ namespace Proto.Cluster.Tests
                                     Sender = _instanceId
                                 }, CancellationToken.None
                             );
-                        }
+                    }
 
-                        context.Respond(new Ack());
-                        break;
-                }
+                    context.Respond(new Ack());
+
+                    break;
             }
         }
+    }
 
-        private class VerifyOrderActor : IActor
+    private class VerifyOrderActor : IActor
+    {
+        public const string Kind = "aggregator";
+
+        private readonly Dictionary<string, int> _lastReceivedSeq = new();
+        private readonly HashSet<string> _senders = new();
+
+        private int _outOfOrderErrors;
+        private int _seqRequests;
+
+        public Task ReceiveAsync(IContext context)
         {
-            public const string Kind = "aggregator";
-
-            private readonly Dictionary<string, int> _lastReceivedSeq = new();
-            private readonly HashSet<string> _senders = new();
-
-            private int _outOfOrderErrors;
-            private int _seqRequests;
-
-            public Task ReceiveAsync(IContext context)
+            switch (context.Message)
             {
-                switch (context.Message)
-                {
-                    case SequentialIdRequest request:
-                        HandleOrderedRequest(request, context);
-                        break;
-                    case AskAggregator:
-                        context.Respond(new AggregatorResult
-                            {
-                                SequenceKeyCount = _lastReceivedSeq.Count,
-                                TotalMessages = _seqRequests,
-                                OutOfOrderCount = _outOfOrderErrors,
-                                SenderKeyCount = _senders.Count
-                            }
-                        );
-                        break;
-                }
+                case SequentialIdRequest request:
+                    HandleOrderedRequest(request, context);
 
-                return Task.CompletedTask;
-            }
-
-            private void HandleOrderedRequest(SequentialIdRequest request, IContext context)
-            {
-                _seqRequests++;
-                _senders.Add(request.Sender);
-                var outOfOrder = _lastReceivedSeq.TryGetValue(request.SequenceKey, out var last) &&
-                                 last + 1 != request.SequenceId;
-                _lastReceivedSeq[request.SequenceKey] = request.SequenceId;
-                if (outOfOrder) _outOfOrderErrors++;
-
-                context.Respond(new Ack());
-            }
-        }
-
-        // ReSharper disable once ClassNeverInstantiated.Global
-        public class OrderedDeliveryFixture : BaseInMemoryClusterFixture
-        {
-            public OrderedDeliveryFixture() : base(3)
-            {
-            }
-
-            protected override ClusterKind[] ClusterKinds {
-                get {
-                    var senderProps = Props.FromProducer(() => new SenderActor());
-                    var aggProps = Props.FromProducer(() => new VerifyOrderActor());
-                    return base.ClusterKinds.Concat(new ClusterKind[]
+                    break;
+                case AskAggregator:
+                    context.Respond(new AggregatorResult
                         {
-                            new (SenderActor.Kind, senderProps),
-                            new (VerifyOrderActor.Kind, aggProps)
+                            SequenceKeyCount = _lastReceivedSeq.Count,
+                            TotalMessages = _seqRequests,
+                            OutOfOrderCount = _outOfOrderErrors,
+                            SenderKeyCount = _senders.Count
                         }
-                    ).ToArray();
-                }
+                    );
+
+                    break;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private void HandleOrderedRequest(SequentialIdRequest request, IContext context)
+        {
+            _seqRequests++;
+            _senders.Add(request.Sender);
+
+            var outOfOrder = _lastReceivedSeq.TryGetValue(request.SequenceKey, out var last) &&
+                             last + 1 != request.SequenceId;
+
+            _lastReceivedSeq[request.SequenceKey] = request.SequenceId;
+
+            if (outOfOrder)
+            {
+                _outOfOrderErrors++;
+            }
+
+            context.Respond(new Ack());
+        }
+    }
+
+    // ReSharper disable once ClassNeverInstantiated.Global
+    public class OrderedDeliveryFixture : BaseInMemoryClusterFixture
+    {
+        public OrderedDeliveryFixture() : base(3)
+        {
+        }
+
+        protected override ClusterKind[] ClusterKinds
+        {
+            get
+            {
+                var senderProps = Props.FromProducer(() => new SenderActor());
+                var aggProps = Props.FromProducer(() => new VerifyOrderActor());
+
+                return base.ClusterKinds.Concat(new ClusterKind[]
+                        {
+                            new(SenderActor.Kind, senderProps),
+                            new(VerifyOrderActor.Kind, aggProps)
+                        }
+                    )
+                    .ToArray();
             }
         }
     }

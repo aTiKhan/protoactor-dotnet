@@ -3,76 +3,96 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 
 // ReSharper disable once CheckNamespace
-namespace Proto
-{
-    public class ProcessRegistry
-    {
-        private readonly List<Func<PID, Process>> _hostResolvers = new();
-        private readonly HashedConcurrentDictionary _localProcesses = new();
-        private int _sequenceId;
-        
-        public IEnumerable<PID> Find(Func<string, bool> predicate)
-        {
-            var res = _localProcesses.Where(kvp => predicate(kvp.key));
+namespace Proto;
 
-            foreach (var (id, process) in res)
+/// <summary>
+///     Manages all processes in the actor system (actors, futures, event stream, etc.).
+/// </summary>
+public class ProcessRegistry
+{
+    private readonly List<Func<PID, Process?>> _hostResolvers = new();
+    private readonly ConcurrentDictionary<string, Process> _localProcesses = new();
+    private int _sequenceId;
+
+    public ProcessRegistry(ActorSystem system)
+    {
+        System = system;
+    }
+
+    private ActorSystem System { get; }
+
+    public int ProcessCount => _localProcesses.Count;
+
+    public IEnumerable<PID> Find(Func<string, bool> predicate)
+    {
+        var res = _localProcesses.Where(kvp => predicate(kvp.Key));
+
+        foreach (var (id, process) in res)
+        {
+            yield return new PID(System.Address, id, process);
+        }
+    }
+
+    public IEnumerable<PID> Find(string pattern) =>
+        Find(s => s.Contains(pattern, StringComparison.InvariantCultureIgnoreCase));
+
+    public void RegisterHostResolver(Func<PID, Process> resolver) => _hostResolvers.Add(resolver);
+
+    public Process Get(PID pid)
+    {
+        if (pid.Address == ActorSystem.NoHost || (pid.Address == System.Address &&
+                                                  !pid.Id.StartsWith(ActorSystem.Client, StringComparison.Ordinal)))
+        {
+            return (_localProcesses.TryGetValue(pid.Id, out var process) switch
             {
-                yield return new PID(System.Address, id, process);
-            }
+                true  => process,
+                false => System.DeadLetter
+                // ReSharper disable once RedundantSuppressNullableWarningExpression
+            })!;
         }
 
-        public IEnumerable<PID> Find(string pattern) => 
-            Find(s => s.Contains(pattern, StringComparison.InvariantCultureIgnoreCase));
+        Process? reff = null;
 
-        public ProcessRegistry(ActorSystem system) => System = system;
-
-        private ActorSystem System { get; }
-
-        public int ProcessCount => _localProcesses.Count;
-
-        public void RegisterHostResolver(Func<PID, Process> resolver) => _hostResolvers.Add(resolver);
-
-        public Process Get(PID pid)
+        foreach (var resolver in _hostResolvers)
         {
-            if (pid.Address == ActorSystem.NoHost || (pid.Address == System.Address && !pid.Id.StartsWith(ActorSystem.Client, StringComparison.Ordinal)))
-            {
-                if (_localProcesses.TryGetValue(pid.Id, out var process)) return process;
-                return System.DeadLetter;
-            }
-            else
-            {
-                Process? reff = null;
-                foreach (var resolver in _hostResolvers)
-                {
-                    reff = resolver(pid);
-                    if (reff != null) return reff;
-                }
+            reff = resolver(pid);
 
-                if (reff is null) throw new NotSupportedException("Unknown host");
+            if (reff != null)
+            {
                 return reff;
             }
         }
 
-        public (PID pid, bool ok) TryAdd(string id, Process process)
+        return reff switch
         {
-            var pid = new PID(System.Address, id, process);
+            null => throw new NotSupportedException("Unknown host"),
+            _    => reff
+        };
+    }
 
-            var ok = _localProcesses.TryAdd(pid.Id, process);
-            return ok ? (pid, true) : (PID.FromAddress(System.Address, id), false);
-        }
+    public (PID pid, bool ok) TryAdd(string id, Process process)
+    {
+        var pid = new PID(System.Address, id, process);
 
-        public void Remove(PID pid) => _localProcesses.Remove(pid.Id);
+        var ok = _localProcesses.TryAdd(pid.Id, process);
 
-        public string NextId()
-        {
-            var counter = Interlocked.Increment(ref _sequenceId);
-            return "$" + counter;
-        }
+        return ok ? (pid, true) : (PID.FromAddress(System.Address, id), false);
+    }
+
+    public void Remove(PID pid) => _localProcesses.TryRemove(pid.Id, out _);
+
+    public string NextId()
+    {
+        var counter = Interlocked.Increment(ref _sequenceId);
+
+        return "$" + counter;
     }
 }

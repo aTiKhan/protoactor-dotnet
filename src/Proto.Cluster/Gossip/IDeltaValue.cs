@@ -3,10 +3,9 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
-namespace Proto.Cluster.Gossip
+
+namespace Proto.Cluster.Gossip;
+
+public interface IDeltaValue
 {
-    public interface IDeltaValue
-    {
-        
-    }
 }

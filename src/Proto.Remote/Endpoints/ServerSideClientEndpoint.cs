@@ -4,13 +4,15 @@
 //   </copyright>
 // -----------------------------------------------------------------------
 
-namespace Proto.Remote
+namespace Proto.Remote;
+
+/// <summary>
+///     Handles connection to a client actor system.
+/// </summary>
+public sealed class ServerSideClientEndpoint : Endpoint
 {
-    /// <summary>
-    /// Handles connection to a client actor system.
-    /// </summary>
-    public class ServerSideClientEndpoint : Endpoint
+    public ServerSideClientEndpoint(ActorSystem system, RemoteConfigBase remoteConfig, string remoteAddress) : base(
+        remoteAddress, system, remoteConfig)
     {
-        public ServerSideClientEndpoint(ActorSystem system, RemoteConfigBase remoteConfig, string address) : base(address, system, remoteConfig) { }
     }
 }

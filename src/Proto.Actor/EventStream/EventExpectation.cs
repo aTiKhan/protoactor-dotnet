@@ -3,31 +3,38 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System;
 using System.Threading.Tasks;
 using JetBrains.Annotations;
 
 // ReSharper disable once CheckNamespace
-namespace Proto
+namespace Proto;
+
+[PublicAPI]
+internal class EventExpectation<T>
 {
-    [PublicAPI]
-    class EventExpectation<T>
+    private readonly Func<T, bool> _predicate;
+
+    private readonly TaskCompletionSource<T> _source =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public EventExpectation(Func<T, bool> predicate)
     {
-        private readonly Func<T, bool> _predicate;
+        _predicate = predicate;
+    }
 
-        private readonly TaskCompletionSource<T> _source =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public Task<T> Task => _source.Task;
 
-        public EventExpectation(Func<T, bool> predicate) => _predicate = predicate;
-
-        public Task<T> Task => _source.Task;
-
-        public bool Evaluate(T @event)
+    public bool Evaluate(T @event)
+    {
+        if (!_predicate(@event))
         {
-            if (!_predicate(@event)) return false;
-
-            _source.SetResult(@event);
-            return true;
+            return false;
         }
+
+        _source.SetResult(@event);
+
+        return true;
     }
 }

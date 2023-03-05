@@ -3,35 +3,38 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
+
 using System.Threading;
 using Proto.Mailbox;
 
 // ReSharper disable once CheckNamespace
-namespace Proto
+namespace Proto;
+
+public class ActorProcess : Process
 {
-    public class ActorProcess : Process
+    private long _isDead;
+
+    public ActorProcess(ActorSystem system, IMailbox mailbox) : base(system)
     {
-        private long _isDead;
+        Mailbox = mailbox;
+    }
 
-        public ActorProcess(ActorSystem system, IMailbox mailbox) : base(system) => Mailbox = mailbox;
+    private IMailbox Mailbox { get; }
 
-        private IMailbox Mailbox { get; }
+    internal bool IsDead
+    {
+        get => Interlocked.Read(ref _isDead) == 1;
+        private set => Interlocked.Exchange(ref _isDead, value ? 1 : 0);
+    }
 
-        internal bool IsDead {
-            get => Interlocked.Read(ref _isDead) == 1;
-            private set => Interlocked.Exchange(ref _isDead, value ? 1 : 0);
-        }
+    protected internal override void SendUserMessage(PID pid, object message) => Mailbox.PostUserMessage(message);
 
-        protected internal override void SendUserMessage(PID pid, object message) =>
-            Mailbox.PostUserMessage(message);
+    protected internal override void SendSystemMessage(PID pid, SystemMessage message) =>
+        Mailbox.PostSystemMessage(message);
 
-        protected internal override void SendSystemMessage(PID pid, object message) =>
-            Mailbox.PostSystemMessage(message);
-
-        public override void Stop(PID pid)
-        {
-            base.Stop(pid);
-            IsDead = true;
-        }
+    public override void Stop(PID pid)
+    {
+        base.Stop(pid);
+        IsDead = true;
     }
 }

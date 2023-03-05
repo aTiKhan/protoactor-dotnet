@@ -3,15 +3,18 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
-namespace Proto.Router.Routers
+
+namespace Proto.Router.Routers;
+
+internal record RoundRobinPoolRouterConfig : PoolRouterConfig
 {
-    record RoundRobinPoolRouterConfig : PoolRouterConfig
+    private readonly ISenderContext _senderContext;
+
+    public RoundRobinPoolRouterConfig(ISenderContext senderContext, int poolSize, Props routeeProps)
+        : base(poolSize, routeeProps)
     {
-        private readonly ISenderContext _senderContext;
-
-        public RoundRobinPoolRouterConfig(ISenderContext senderContext, int poolSize, Props routeeProps)
-            : base(poolSize, routeeProps) => _senderContext = senderContext;
-
-        protected override RouterState CreateRouterState() => new RoundRobinRouterState(_senderContext);
+        _senderContext = senderContext;
     }
+
+    protected override RouterState CreateRouterState() => new RoundRobinRouterState(_senderContext);
 }

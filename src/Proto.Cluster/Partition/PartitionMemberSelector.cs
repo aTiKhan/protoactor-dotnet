@@ -3,31 +3,28 @@
 //      Copyright (C) 2015-2022 Asynkron AB All rights reserved
 // </copyright>
 // -----------------------------------------------------------------------
-using System;
+
 using System.Collections.Immutable;
+using System.Threading;
 
-namespace Proto.Cluster.Partition
+namespace Proto.Cluster.Partition;
+
+//this class is responsible for translating between Identity->member
+//this is the key algorithm for the distributed hash table
+internal class PartitionMemberSelector
 {
-    //this class is responsible for translating between Identity->member
-    //this is the key algorithm for the distributed hash table
-    class PartitionMemberSelector
+    private State _state = new(new MemberHashRing(ImmutableList<Member>.Empty), 0);
+
+    public void Update(Member[] members, ulong topologyHash) =>
+        Interlocked.Exchange(ref _state, new State(new MemberHashRing(members), topologyHash));
+
+    public (string owner, ulong topologyHash) GetIdentityOwner(string key)
     {
-        private readonly object _lock = new();
-        private MemberHashRing _rdv = new(ImmutableList<Member>.Empty);
-        private ulong _topologyHash;
+        var (memberHashRing, topologyHash) = _state;
+        var owner = memberHashRing.GetOwnerMemberByIdentity(key);
 
-        public void Update(Member[] members, ulong topologyHash)
-        {
-            lock (_lock)
-            {
-                _rdv = new MemberHashRing(members);
-                _topologyHash = topologyHash;
-            }
-        }
-
-        public (string owner, ulong topologyHash) GetIdentityOwner(string key)
-        {
-            lock (_lock) return (_rdv.GetOwnerMemberByIdentity(key), _topologyHash);
-        }
+        return (owner, topologyHash);
     }
+
+    private record State(MemberHashRing Rdv, ulong TopologyHash);
 }
